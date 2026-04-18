@@ -1,3 +1,16 @@
+// =============================================
+// Penjelasan singkat keyword, API, dan library (LineChart):
+//
+// - React: Library utama untuk membangun UI berbasis komponen.
+// - Chart.js: Library charting populer untuk visualisasi data (line, candlestick, dsb).
+// - react-chartjs-2: Wrapper React untuk Chart.js.
+// - chartjs-adapter-date-fns: Adapter agar Chart.js bisa menampilkan sumbu waktu dengan format modern.
+//
+// Keyword penting:
+// - props: Data yang dikirim dari parent ke komponen ini (ohlcv).
+// - useRef, useEffect: React hooks untuk efek samping dan referensi DOM.
+// - map: Fungsi array untuk transformasi data.
+// =============================================
 import React, { useRef, useEffect } from "react";
 import { Chart as ChartJS, LineElement, PointElement, LinearScale, TimeScale, Tooltip, Legend } from "chart.js";
 import { Chart } from "react-chartjs-2";
@@ -5,13 +18,13 @@ import 'chartjs-adapter-date-fns';
 
 ChartJS.register(LineElement, PointElement, LinearScale, TimeScale, Tooltip, Legend);
 
-export default function LineChart({ ohlcv, xTimeMode }) {
+export default function LineChart({ ohlcv }) {
   if (!ohlcv || ohlcv.length === 0) return <div>No data</div>;
-  // Pilih field waktu sesuai xTimeMode
-  const timeField = xTimeMode === 'local' ? 'time_local' : (xTimeMode === 'server' ? 'time_utc' : 'time_utc');
   // Tidak perlu konversi waktu, urutkan berdasarkan string saja (asumsi backend sudah urut)
   const sortedOhlcv = [...ohlcv];
   const prevRangeRef = useRef(ohlcv.length);
+  // DEBUG: log sample data
+  console.log('[LineChart] sample:', sortedOhlcv[0]);
 
   // Validasi data: cek gap waktu, duplikasi, interval tidak konsisten
   let debugInfo = "";
@@ -39,7 +52,9 @@ export default function LineChart({ ohlcv, xTimeMode }) {
     datasets: [
       {
         label: "Close Price",
-        data: sortedOhlcv.map((d) => ({ x: d[timeField], y: d.close })),
+        data: sortedOhlcv.map((d) => ({ 
+          x: d.time * 1000, // epoch detik -> ms
+          y: d.close })),
         borderColor: '#1976d2',
         backgroundColor: 'rgba(25, 118, 210, 0.1)',
         pointRadius: 0,
@@ -76,6 +91,7 @@ export default function LineChart({ ohlcv, xTimeMode }) {
       x: {
         type: "time",
         time: { 
+          unit: 'minute',
           displayFormats: {
             minute: 'HH:mm'
           } 
@@ -86,10 +102,7 @@ export default function LineChart({ ohlcv, xTimeMode }) {
         ticks: {
           autoSkip: true,
           maxTicksLimit: 24,
-          callback: function(value) {
-            // Langsung tampilkan string waktu dari backend
-            return value;
-          }
+          // Hapus callback custom agar Chart.js pakai default time formatter
         }
       },
       y: {

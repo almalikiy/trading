@@ -1,3 +1,26 @@
+// =============================================
+// Penjelasan singkat keyword, API, dan library (App.jsx):
+//
+// - React: Library utama untuk membangun UI berbasis komponen.
+// - useState, useEffect: React hooks untuk state lokal dan efek samping (otomatis refresh, polling, dsb).
+// - MUI (Material UI): Library komponen UI siap pakai (Button, Paper, Grid, Typography, dsb).
+// - Chart.js & chartjs-chart-financial: Library charting untuk candlestick/line chart.
+// - chartjs-adapter-date-fns: Adapter agar Chart.js bisa menampilkan sumbu waktu dengan format modern.
+// - ReconnectingWebSocket: Library JS untuk websocket yang otomatis reconnect (real-time signal).
+// - FastAPI: Backend Python (REST API/WebSocket, sumber data utama).
+//
+// Keyword penting:
+// - props: Data yang dikirim dari parent ke child component.
+// - state: Data lokal tiap komponen, berubah -> re-render.
+// - useEffect: Jalankan kode saat mount/update/unmount.
+// - fetch: API JS untuk ambil data dari backend (REST API).
+// - map: Fungsi array untuk transformasi data.
+//
+// Struktur utama file ini:
+// - State utama: signal, ohlcv, indicators, chartMode, dsb.
+// - fetchOhlcv: Fungsi untuk ambil data harga dari backend.
+// - Komponen utama: Chart, Table, Panel indikator, dsb.
+// =============================================
 // Helper: export object array to CSV
 function exportIndicatorsToCSV(indicators) {
   if (!indicators) return;
@@ -46,7 +69,6 @@ import ReconnectingWebSocket from "reconnecting-websocket";
 const WS_URL = "ws://localhost:8000/ws/signal";
 
 export default function App() {
-  const [xTimeMode, setXTimeMode] = useState('server'); // 'server' atau 'local'
   const [signalError, setSignalError] = useState(null);
   const [chartMode, setChartMode] = useState('candlestick');
   const [signal, setSignal] = useState("wait");
@@ -161,7 +183,7 @@ export default function App() {
     };
     fetchOhlcv();
     return () => clearTimeout(timer);
-  }, [symbol, tf, barCount, xTimeMode]);
+  }, [symbol, tf, barCount]);
 
   // ...existing code...
 
@@ -336,7 +358,9 @@ export default function App() {
         {/* Info waktu data terakhir */}
         {ohlcv && ohlcv.length > 0 && (
           <Typography variant="caption" sx={{ display: 'block', mt: 1 }}>
-            Last data: {ohlcv[ohlcv.length-1].time}
+            {/* Keterangan waktu: epoch UTC, biasanya waktu server broker GMT+2/GMT+3 */}
+            Last data (epoch UTC): {ohlcv[ohlcv.length-1].time} &nbsp;|&nbsp; 
+            <span style={{color:'#888'}}>Note: Waktu server broker biasanya GMT+2/GMT+3, epoch ini = UTC</span>
           </Typography>
         )}
       </Paper>
@@ -344,18 +368,7 @@ export default function App() {
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
           <Typography variant="h6">Chart</Typography>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <FormControl size="small" sx={{ minWidth: 180 }}>
-              <InputLabel id="x-time-mode-label">Label Waktu Sumbu X</InputLabel>
-              <Select
-                labelId="x-time-mode-label"
-                value={xTimeMode}
-                label="Label Waktu Sumbu X"
-                onChange={e => setXTimeMode(e.target.value)}
-              >
-                <MenuItem value="server">Waktu Server</MenuItem>
-                <MenuItem value="local">Waktu Lokal (Komputer User)</MenuItem>
-              </Select>
-            </FormControl>
+            {/* Hapus dropdown mode waktu, chart hanya pakai waktu MT5 (UTC epoch) */}
             <Button
               size="small"
               variant={chartMode === 'candlestick' ? 'contained' : 'outlined'}
@@ -388,7 +401,7 @@ export default function App() {
                       fontSize: 15,
                       textAlign: 'center',
                       letterSpacing: 1
-                    }}>Time</th>
+                    }}>Time (epoch UTC)</th>
                     <th style={{ 
                       border: '1px solid #ddd', 
                       padding: 4, 
@@ -457,11 +470,11 @@ export default function App() {
             </div>
           </>
         ) : (
-          chartMode === 'candlestick' ? (
-            <CandlestickChart ohlcv={ohlcv} xTimeMode={xTimeMode} key={xTimeMode} />
+          (chartMode === 'candlestick' ? (
+            <CandlestickChart ohlcv={ohlcv} />
           ) : (
-            <LineChart ohlcv={ohlcv} xTimeMode={xTimeMode} key={xTimeMode} />
-          )
+            <LineChart ohlcv={ohlcv} />
+          ))
         )}
       </Paper>
       <Paper sx={{ p: { xs: 1, sm: 2 }, overflowX: 'auto', width: '100%' }}>

@@ -1,11 +1,23 @@
+// =============================================
+// Penjelasan singkat keyword, API, dan library (CandlestickChart):
+//
+// - React: Library utama untuk membangun UI berbasis komponen.
+// - Chart.js & chartjs-chart-financial: Library charting untuk candlestick/ohlc.
+// - react-chartjs-2: Wrapper React untuk Chart.js.
+// - chartjs-adapter-date-fns: Adapter agar Chart.js bisa menampilkan sumbu waktu dengan format modern.
+//
+// Keyword penting:
+// - props: Data yang dikirim dari parent ke komponen ini (ohlcv).
+// - useRef, useEffect, useState: React hooks untuk efek samping, referensi DOM, dan state lokal.
+// - map: Fungsi array untuk transformasi data.
+// =============================================
 
 import React, { useRef, useEffect, useState } from "react";
 import { Chart as ChartJS, registerables } from "chart.js";
 import { Chart } from "react-chartjs-2";
-
-
 import { CandlestickController, CandlestickElement, OhlcController, OhlcElement } from 'chartjs-chart-financial';
 import 'chartjs-adapter-date-fns';
+
 ChartJS.register(
   ...registerables,
   CandlestickController,
@@ -14,10 +26,9 @@ ChartJS.register(
   OhlcElement
 );
 
-export default function CandlestickChart({ ohlcv, xTimeMode }) {
+export default function CandlestickChart({ ohlcv }) {
   const chartRef = useRef(null);
   const [canvasStatus, setCanvasStatus] = useState('');
-  // Hooks harus selalu di atas, pengecekan data setelahnya
   useEffect(() => {
     if (chartRef.current) {
       const canvas = chartRef.current.querySelector('canvas');
@@ -29,22 +40,19 @@ export default function CandlestickChart({ ohlcv, xTimeMode }) {
     }
   });
   if (!ohlcv || ohlcv.length === 0) return <div>No data</div>;
-  const timeField = xTimeMode === 'local' ? 'time_local' : (xTimeMode === 'server' ? 'time_utc' : 'time');
-  // Tidak perlu konversi waktu, gunakan string dari backend
-  const labels = ohlcv.map((d) => d[timeField] || d.time);
   let yMin = undefined, yMax = undefined;
   if (ohlcv && ohlcv.length > 0) {
     yMin = Math.min(...ohlcv.map(d => d.low));
     yMax = Math.max(...ohlcv.map(d => d.high));
   }
+  // Tampilkan waktu sesuai epoch detik yang dikirim backend (tanpa offset)
   const data = {
-    labels,
     datasets: [
       {
         type: 'candlestick',
         label: "OHLCV",
         data: ohlcv.map((d) => ({
-          x: d[timeField] || d.time,
+          x: d.time * 1000, // epoch detik -> ms
           o: d.open,
           h: d.high,
           l: d.low,
@@ -58,39 +66,39 @@ export default function CandlestickChart({ ohlcv, xTimeMode }) {
     plugins: {
       legend: { display: false },
       tooltip: { enabled: true },
+      title: {
+        display: true,
+        text: 'XAUUSD M1 Candlestick Chart',
+      }
     },
     scales: {
       x: {
         type: "time",
-        time: { unit: "minute" },
-        grid: {
-          drawOnChartArea: true,
+        offset: false, // hilangkan padding kiri-kanan agar chart penuh
+        time: {
+          unit: "minute",
+          displayFormats: {
+            minute: "HH:mm",
+            hour: "HH:mm",
+            day: "HH:mm"
+          },
+          tooltipFormat: "HH:mm"
         },
+        grid: { drawOnChartArea: true },
         ticks: {
           autoSkip: true,
-          maxTicksLimit: 24, // lebih banyak grid vertikal
+          maxTicksLimit: 24,
+          align: 'start', // rata kiri
           callback: function(value, index, ticks) {
-            let date = new Date(value);
-            if (typeof window !== 'undefined' && window.xTimeMode === 'local') {
-              // value diasumsikan UTC, new Date(value) sudah otomatis local, cukup gunakan date
+            // Format label 24 jam (HH:mm), candle pertama tampilkan tanggal di bawah jam
+            const date = new Date(value);
+            const jam = date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+            if (index === 0) {
+              const tgl = date.toLocaleDateString('en-CA'); // YYYY-MM-DD
+              // Gunakan Unicode newline (\u000A) agar Chart.js render multi-line
+              return jam + '\u000A' + tgl;
             }
-            const prevTick = ticks[index-1];
-            let showDate = false;
-            if (index === 0) showDate = true;
-            else if (prevTick) {
-              const prevDate = new Date(prevTick.value);
-              if (
-                date.getFullYear() !== prevDate.getFullYear() ||
-                date.getMonth() !== prevDate.getMonth() ||
-                date.getDate() !== prevDate.getDate()
-              ) showDate = true;
-            }
-            const pad = n => n.toString().padStart(2, '0');
-            if (showDate) {
-              return [pad(date.getDate()) + '/' + pad(date.getMonth()+1), pad(date.getHours()) + ':' + pad(date.getMinutes())];
-            } else {
-              return pad(date.getHours()) + ':' + pad(date.getMinutes());
-            }
+            return jam;
           }
         }
       },
