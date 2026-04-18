@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+pandas
+numpy
+MetaTrader5
+TA-Lib
+python-dotenv

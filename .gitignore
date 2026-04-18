@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+*.log
+*.pot
+*.mo
+*.env
+.venv/
+venv/
+ENV/
+.env.*
+
+# VS Code
+.vscode/
+.history/
+
+# Node
+node_modules/
+*.log
+yarn.lock
+package-lock.json
+npm-debug.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend build
+frontend/dist/
+frontend/build/
+
+# Misc
+*.bak
+*.swp
+*.tmp
+*.orig
+
+# Test
+coverage/
+*.cover
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Export
+*.csv
+*.xlsx
