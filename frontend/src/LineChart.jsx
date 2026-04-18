@@ -8,7 +8,7 @@ ChartJS.register(LineElement, PointElement, LinearScale, TimeScale, Tooltip, Leg
 export default function LineChart({ ohlcv, xTimeMode }) {
   if (!ohlcv || ohlcv.length === 0) return <div>No data</div>;
   // Pilih field waktu sesuai xTimeMode
-  const timeField = xTimeMode === 'local' ? 'time_local' : (xTimeMode === 'server' ? 'time_utc' : 'time');
+  const timeField = xTimeMode === 'local' ? 'time_local' : (xTimeMode === 'server' ? 'time_utc' : 'time_utc');
   // Tidak perlu konversi waktu, urutkan berdasarkan string saja (asumsi backend sudah urut)
   const sortedOhlcv = [...ohlcv];
   const prevRangeRef = useRef(ohlcv.length);
@@ -35,13 +35,11 @@ export default function LineChart({ ohlcv, xTimeMode }) {
     debugInfo += `Interval rata-rata: ${avg/1000}s. `;
   }
   // debugInfo += `Jumlah data: ${sortedOhlcv.length}. Range: ${sortedOhlcv[0]?.time} - ${sortedOhlcv[sortedOhlcv.length-1]?.time}`;
-  const labels = sortedOhlcv.map((d) => d[timeField] || d.time);
   const data = {
-    labels,
     datasets: [
       {
         label: "Close Price",
-        data: sortedOhlcv.map((d) => d.close),
+        data: sortedOhlcv.map((d) => ({ x: d[timeField], y: d.close })),
         borderColor: '#1976d2',
         backgroundColor: 'rgba(25, 118, 210, 0.1)',
         pointRadius: 0,
@@ -77,7 +75,11 @@ export default function LineChart({ ohlcv, xTimeMode }) {
     scales: {
       x: {
         type: "time",
-        time: { unit: "minute" },
+        time: { 
+          displayFormats: {
+            minute: 'HH:mm'
+          } 
+        },
         grid: {
           drawOnChartArea: true,
         },
