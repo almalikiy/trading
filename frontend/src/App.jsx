@@ -471,7 +471,7 @@ export default function App() {
           </>
         ) : (
           (chartMode === 'candlestick' ? (
-            <CandlestickChart ohlcv={ohlcv} />
+            <CandlestickChart ohlcv={ohlcv} jumlahBar={barCount} />
           ) : (
             <LineChart ohlcv={ohlcv} />
           ))

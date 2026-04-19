@@ -26,7 +26,8 @@ ChartJS.register(
   OhlcElement
 );
 
-export default function CandlestickChart({ ohlcv }) {
+// jumlahBar: jumlah bar yang ingin ditampilkan (misal 30, 60, 120, 240)
+export default function CandlestickChart({ ohlcv, jumlahBar = 60 }) {
   const chartRef = useRef(null);
   const [canvasStatus, setCanvasStatus] = useState('');
   useEffect(() => {
@@ -40,25 +41,98 @@ export default function CandlestickChart({ ohlcv }) {
     }
   });
   if (!ohlcv || ohlcv.length === 0) return <div>No data</div>;
+  // Ambil jumlahBar terakhir dari data (pastikan cukup data)
+  const ohlcvSlice = ohlcv.length > jumlahBar ? ohlcv.slice(-jumlahBar) : ohlcv.slice();
   let yMin = undefined, yMax = undefined;
-  if (ohlcv && ohlcv.length > 0) {
-    yMin = Math.min(...ohlcv.map(d => d.low));
-    yMax = Math.max(...ohlcv.map(d => d.high));
+  const yPadding = 5; // padding tetap (misal 5 pip)
+  if (ohlcvSlice && ohlcvSlice.length > 0) {
+    yMin = Math.min(...ohlcvSlice.map(d => d.low));
+    yMax = Math.max(...ohlcvSlice.map(d => d.high));
+    yMin = Math.floor(yMin - yPadding);
+    yMax = Math.ceil(yMax + yPadding);
   }
-  // Tampilkan waktu sesuai epoch detik yang dikirim backend (tanpa offset)
+  // Manipulasi data: hilangkan candle pertama, tambahkan bar null setelah terakhir
+  let chartData = [];
+  let bbUpper = [], bbMiddle = [], bbLower = [];
+  const bbPeriod = 20, bbStd = 2;
+  if (ohlcvSlice.length > 2) {
+    // Buang candle pertama
+    const ohlcvTrim = ohlcvSlice.slice(1);
+    chartData = ohlcvTrim.map((d) => ({
+      x: d.time * 1000,
+      o: d.open,
+      h: d.high,
+      l: d.low,
+      c: d.close
+    }));
+    // Bollinger Band (20, 2)
+    for (let i = 0; i < ohlcvTrim.length; i++) {
+      if (i < bbPeriod - 1) {
+        bbUpper.push(null);
+        bbMiddle.push(null);
+        bbLower.push(null);
+        continue;
+      }
+      const slice = ohlcvTrim.slice(i - bbPeriod + 1, i + 1);
+      const closes = slice.map(d => d.close);
+      const mean = closes.reduce((a, b) => a + b, 0) / bbPeriod;
+      const std = Math.sqrt(closes.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / bbPeriod);
+      bbMiddle.push(mean);
+      bbUpper.push(mean + bbStd * std);
+      bbLower.push(mean - bbStd * std);
+    }
+    // Tambahkan bar null setelah candle terakhir
+    const last = ohlcvTrim[ohlcvTrim.length - 1];
+    const nextTime = last.time * 1000 + (ohlcvTrim[1].time - ohlcvTrim[0].time) * 1000; // asumsikan interval sama
+    chartData.push({ x: nextTime, o: null, h: null, l: null, c: null });
+    bbUpper.push(null);
+    bbMiddle.push(null);
+    bbLower.push(null);
+  }
   const data = {
     datasets: [
       {
         type: 'candlestick',
         label: "OHLCV",
-        data: ohlcv.map((d) => ({
-          x: d.time * 1000, // epoch detik -> ms
-          o: d.open,
-          h: d.high,
-          l: d.low,
-          c: d.close
-        }))
-      }
+        data: chartData
+      },
+      // Bollinger Band Upper
+      {
+        type: 'line',
+        label: 'BB Upper',
+        data: chartData.map((d, i) => ({ x: d.x, y: bbUpper[i] })),
+        borderColor: 'rgba(0,123,255,0.5)',
+        borderWidth: 1,
+        pointRadius: 0,
+        fill: false,
+        order: 1,
+        yAxisID: 'y',
+      },
+      // Bollinger Band Middle
+      {
+        type: 'line',
+        label: 'BB Middle',
+        data: chartData.map((d, i) => ({ x: d.x, y: bbMiddle[i] })),
+        borderColor: 'rgba(0,123,255,0.3)',
+        borderWidth: 1,
+        pointRadius: 0,
+        borderDash: [4,2],
+        fill: false,
+        order: 1,
+        yAxisID: 'y',
+      },
+      // Bollinger Band Lower
+      {
+        type: 'line',
+        label: 'BB Lower',
+        data: chartData.map((d, i) => ({ x: d.x, y: bbLower[i] })),
+        borderColor: 'rgba(0,123,255,0.5)',
+        borderWidth: 1,
+        pointRadius: 0,
+        fill: false,
+        order: 1,
+        yAxisID: 'y',
+      },
     ]
   };
   const options = {
@@ -113,8 +187,8 @@ export default function CandlestickChart({ ohlcv }) {
     },
   };
   return (
-    <div style={{ height: 350, width: '100%' }} ref={chartRef}>
-      <Chart type="candlestick" data={data} options={options} height={320} width={800} />
+    <div style={{ height: '100%', width: '100%' }} ref={chartRef}>
+      <Chart type="candlestick" data={data} options={options} />
     </div>
   );
 }

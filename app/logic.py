@@ -52,23 +52,14 @@ def fetch_ohlcv(symbol, timeframe, bars=100):
     # Inisialisasi koneksi ke MetaTrader 5
     if not mt5.initialize():
         raise RuntimeError("MT5 not connected")
-    # Ambil data rates (OHLCV) dari MT5
-    # mt5.copy_rates_from_pos mengembalikan array of dict/struct, satu bar = satu candle
-    # Format return: list of dict, contoh:
-    # [
-    #   {'time': 1713446400, 'open': 2320.5, 'high': 2321.0, 'low': 2319.5, 'close': 2320.8, 'tick_volume': 123, ...},
-    #   {'time': 1713446460, 'open': 2320.8, 'high': 2321.2, 'low': 2320.0, 'close': 2320.9, 'tick_volume': 110, ...},
-    #   ...
-    # ]
-    # Kolom utama: time (epoch detik UTC), open, high, low, close, tick_volume
-    rates = mt5.copy_rates_from_pos(symbol, tf_map[timeframe], 0, bars)
+    # Ambil 60 bar ekstra dari permintaan
+    bars_fetch = bars + 60
+    rates = mt5.copy_rates_from_pos(symbol, tf_map[timeframe], 0, bars_fetch)
     if rates is None or len(rates) == 0:
         raise RuntimeError(f"No data for {symbol} {timeframe}")
-    # Ubah ke DataFrame pandas
     df = pd.DataFrame(rates)
     if df.empty:
         raise RuntimeError(f"No data for {symbol} {timeframe}")
-    # Tidak ada konversi waktu, hanya kirim time asli dari MT5 (UTC epoch detik)
     df = df[['time', 'open', 'high', 'low', 'close', 'tick_volume']]
     df = df.astype({
         'open': float,
@@ -77,6 +68,7 @@ def fetch_ohlcv(symbol, timeframe, bars=100):
         'close': float,
         'tick_volume': int
     }, errors='ignore')
+    # Kembalikan semua bar hasil fetch, frontend yang memilih bar mana yang ditampilkan
     return df
 
 ###########################################################

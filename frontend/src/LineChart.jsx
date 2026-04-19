@@ -117,8 +117,8 @@ export default function LineChart({ ohlcv }) {
     },
   };
   return (
-    <div style={{ height: 350, width: '100%' }}>
-      <Chart type="line" data={data} options={options} height={320} width={800} />
+    <div style={{ height: '100%', width: '100%' }}>
+      <Chart type="line" data={data} options={options} />
     </div>
   );
 }
