@@ -1,0 +1,4 @@
+// Placeholder for Android Studio project structure
+// To build: Open this folder in Android Studio and create a new project with a minimal Activity.
+// Use Jetpack Compose or XML for UI, and implement a foreground service for always-on-top floating window.
+// Integrate with backend for trade alerts (REST/WebSocket).

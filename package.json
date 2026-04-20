@@ -1,5 +1,6 @@
 {
   "dependencies": {
-    "chartjs-chart-financial": "^0.2.1"
+    "chartjs-chart-financial": "^0.2.1",
+    "firebase": "^12.12.0"
   }
 }

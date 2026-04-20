@@ -23,8 +23,8 @@ router = APIRouter()
 
 
 @router.get("/signal")
-def get_signal(symbol: str = "XAUUSD"):
-    return analyze_symbol(symbol)
+def get_signal(symbol: str = "XAUUSD", mode: str = "real"):
+    return analyze_symbol(symbol, mode=mode)
 
 # Endpoint: OHLCV data for chart
 from .logic import fetch_ohlcv

@@ -102,8 +102,17 @@ def calculate_indicators(df):
 # Fungsi: Generate sinyal trading berdasarkan indikator
 # Contoh logika: buy jika semua syarat indikator terpenuhi
 ###########################################################
-def generate_signal(indicators):
-    # Example: all RSI < 70, MACD > signal, price above SMA, price near BB lower
+def generate_signal(indicators, mode='real'):
+    # Mode scalp: hanya cek M1 dan M5, syarat lebih longgar
+    if mode == 'scalp':
+        tfs = [k for k in indicators.keys() if k in ['M1', 'M5']]
+        if (
+            all(indicators[tf]['macd'] > indicators[tf]['macd_signal'] for tf in tfs) and
+            all(indicators[tf]['rsi'] < 80 for tf in tfs)
+        ):
+            return 'buy'
+        return 'wait'
+    # Mode normal: semua TF, syarat ketat
     if (
         all(i['rsi'] < 70 for i in indicators.values()) and
         all(i['macd'] > i['macd_signal'] for i in indicators.values()) and
@@ -124,46 +133,12 @@ def analyze_symbol(symbol, bars=60, timeframes=None, mode='real'):
     for tf in timeframes:
         try:
             df = fetch_ohlcv(symbol, tf)
-            if mode == 'simulasi':
-                # Simulasikan data OHLCV dan indikator (dummy, random walk, dsb)
-                import numpy as np
-                import pandas as pd
-                np.random.seed(42)
-                base = 2000
-                times = pd.date_range(end=pd.Timestamp.utcnow(), periods=bars, freq='1min')
-                prices = base + np.cumsum(np.random.randn(bars))
-                df = pd.DataFrame({
-                    'time': times,
-                    'open': prices + np.random.randn(bars),
-                    'high': prices + np.abs(np.random.randn(bars)),
-                    'low': prices - np.abs(np.random.randn(bars)),
-                    'close': prices,
-                    'tick_volume': np.random.randint(100, 200, bars)
-                })
-                for tf in timeframes:
-                    # Untuk TF selain M1, lakukan resample
-                    if tf == 'M1':
-                        dftf = df.copy()
-                    else:
-                        rule = tf.replace('M', 'T')
-                        dftf = df.resample(rule, on='time').agg({
-                            'open': 'first',
-                            'high': 'max',
-                            'low': 'min',
-                            'close': 'last',
-                            'tick_volume': 'sum'
-                        }).dropna().reset_index()
-                    indicators = calculate_indicators(dftf)
-                    results[tf] = indicators
-                signal = generate_signal(results)
-                sim = SignalSimulator(signal)
-                return {'signal': signal, 'indicators': results, 'sim': sim.get_state()}
             indicators[tf] = calculate_indicators(df)
         except Exception as e:
             errors[tf] = str(e)
     if errors:
         return {'error': 'Failed to fetch data for some timeframes', 'details': errors}
-    signal = generate_signal(indicators)
+    signal = generate_signal(indicators, mode=mode)
     # --- Simulator logic ---
     if 'M1' in indicators:
         price = indicators['M1']['sma']

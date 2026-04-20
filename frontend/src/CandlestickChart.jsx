@@ -27,7 +27,7 @@ ChartJS.register(
 );
 
 // jumlahBar: jumlah bar yang ingin ditampilkan (misal 30, 60, 120, 240)
-export default function CandlestickChart({ ohlcv, jumlahBar = 60 }) {
+export default function CandlestickChart({ ohlcv, jumlahBar = 60, spread = 0.0 }) {
   const chartRef = useRef(null);
   const [canvasStatus, setCanvasStatus] = useState('');
   useEffect(() => {
@@ -50,6 +50,17 @@ export default function CandlestickChart({ ohlcv, jumlahBar = 60 }) {
     yMax = Math.max(...ohlcvSlice.map(d => d.high));
     yMin = Math.floor(yMin - yPadding);
     yMax = Math.ceil(yMax + yPadding);
+  }
+
+  // Ambil harga sekarang (close terakhir) dan spread
+  let currentPrice = null;
+  let spreadLong = null;
+  let spreadShort = null;
+  if (ohlcvSlice && ohlcvSlice.length > 0) {
+    const lastBar = ohlcvSlice[ohlcvSlice.length - 1];
+    currentPrice = lastBar.close;
+    spreadLong = currentPrice + (spread || 0);
+    spreadShort = currentPrice - (spread || 0);
   }
   // Manipulasi data: hilangkan candle pertama, tambahkan bar null setelah terakhir
   let chartData = [];
@@ -133,6 +144,54 @@ export default function CandlestickChart({ ohlcv, jumlahBar = 60 }) {
         order: 1,
         yAxisID: 'y',
       },
+      // Garis harga sekarang
+      ...(currentPrice && chartData.length > 0 ? [{
+        type: 'line',
+        label: 'Current Price',
+        data: [
+          { x: chartData[0].x, y: currentPrice },
+          { x: chartData[chartData.length - 1].x, y: currentPrice }
+        ],
+        borderColor: '#e53935',
+        borderWidth: 2,
+        pointRadius: 0,
+        borderDash: [6, 4],
+        fill: false,
+        order: 0,
+        yAxisID: 'y',
+      }] : []),
+      // Garis spread long
+      ...(spreadLong && chartData.length > 0 ? [{
+        type: 'line',
+        label: 'Spread Long',
+        data: [
+          { x: chartData[0].x, y: spreadLong },
+          { x: chartData[chartData.length - 1].x, y: spreadLong }
+        ],
+        borderColor: '#43e97b',
+        borderWidth: 1,
+        pointRadius: 0,
+        borderDash: [2, 2],
+        fill: false,
+        order: 0,
+        yAxisID: 'y',
+      }] : []),
+      // Garis spread short
+      ...(spreadShort && chartData.length > 0 ? [{
+        type: 'line',
+        label: 'Spread Short',
+        data: [
+          { x: chartData[0].x, y: spreadShort },
+          { x: chartData[chartData.length - 1].x, y: spreadShort }
+        ],
+        borderColor: '#1976d2',
+        borderWidth: 1,
+        pointRadius: 0,
+        borderDash: [2, 2],
+        fill: false,
+        order: 0,
+        yAxisID: 'y',
+      }] : []),
     ]
   };
   const options = {
