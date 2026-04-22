@@ -22,10 +22,59 @@ from .logic import analyze_symbol
 router = APIRouter()
 
 
+
 # In-memory user open trade storage (for demo; replace with DB in production)
 user_open_trade = {}
 # In-memory trade history (all closed trades)
 trade_history = []
+# In-memory balance and settings (single account, no user management)
+account_state = {
+    "balance": 1000.0,
+    "initial_balance": 1000.0,
+    "lot": 0.01,
+    "max_open_trades": 1,
+    "history": [],
+}
+# --- Balance & Account Management Endpoints ---
+@router.get("/account/state")
+def get_account_state():
+    return account_state
+
+@router.post("/account/set_initial_balance")
+def set_initial_balance(amount: float = Body(...)):
+    account_state["initial_balance"] = amount
+    account_state["balance"] = amount
+    return {"status": "ok", "balance": account_state["balance"]}
+
+@router.post("/account/deposit")
+def deposit(amount: float = Body(...)):
+    account_state["balance"] += amount
+    account_state["history"].append({"type": "deposit", "amount": amount})
+    return {"status": "ok", "balance": account_state["balance"]}
+
+@router.post("/account/withdraw")
+def withdraw(amount: float = Body(...)):
+    if amount > account_state["balance"]:
+        return {"status": "error", "message": "Insufficient balance"}
+    account_state["balance"] -= amount
+    account_state["history"].append({"type": "withdraw", "amount": amount})
+    return {"status": "ok", "balance": account_state["balance"]}
+
+@router.post("/account/adjustment")
+def adjustment(amount: float = Body(...), note: str = Body("")):
+    account_state["balance"] += amount
+    account_state["history"].append({"type": "adjustment", "amount": amount, "note": note})
+    return {"status": "ok", "balance": account_state["balance"]}
+
+@router.post("/account/set_lot")
+def set_lot(lot: float = Body(...)):
+    account_state["lot"] = lot
+    return {"status": "ok", "lot": lot}
+
+@router.post("/account/set_max_open_trades")
+def set_max_open_trades(count: int = Body(...)):
+    account_state["max_open_trades"] = count
+    return {"status": "ok", "max_open_trades": count}
 
 
 @router.get("/signal")
