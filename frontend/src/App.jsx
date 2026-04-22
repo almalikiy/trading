@@ -102,6 +102,7 @@ const WS_URL = getBackendUrl('mt5', 'ws');
 export default function App() {
     const navigate = useNavigate();
     <Button variant="contained" color="primary" sx={{ml:2}} onClick={() => navigate("/history")}>Trade History</Button>
+    <Button variant="outlined" color="primary" sx={{ml:2}} onClick={() => navigate("/account")}>Account Monitor</Button>
   // --- Strategy Preset & Indicator Params State ---
   const [selectedPreset, setSelectedPreset] = useState('scalp_cepat');
   const [indicatorParams, setIndicatorParams] = useState(strategyPresets[0].params);
