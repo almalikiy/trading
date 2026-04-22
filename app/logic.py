@@ -1,3 +1,65 @@
+# === Real Trade Execution Logic ===
+def open_real_trade(symbol, lot, trade_type):
+    if not mt5.initialize():
+        raise RuntimeError("MT5 not connected")
+    if trade_type == 'buy':
+        order_type = mt5.ORDER_TYPE_BUY
+    elif trade_type == 'sell':
+        order_type = mt5.ORDER_TYPE_SELL
+    else:
+        raise ValueError("trade_type must be 'buy' or 'sell'")
+    price = mt5.symbol_info_tick(symbol).ask if trade_type == 'buy' else mt5.symbol_info_tick(symbol).bid
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": lot,
+        "type": order_type,
+        "price": price,
+        "deviation": 20,
+        "magic": 0,
+        "comment": "",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+    result = mt5.order_send(request)
+    mt5.shutdown()
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        raise RuntimeError(f"Order send failed: {result.retcode} {result.comment}")
+    return {"status": "ok", "order": result._asdict()}
+
+def close_real_trade(symbol, lot, ticket):
+    if not mt5.initialize():
+        raise RuntimeError("MT5 not connected")
+    position = mt5.positions_get(ticket=ticket)
+    if not position:
+        raise RuntimeError(f"No open position with ticket {ticket}")
+    pos = position[0]
+    if pos.type == mt5.POSITION_TYPE_BUY:
+        order_type = mt5.ORDER_TYPE_SELL
+        price = mt5.symbol_info_tick(symbol).bid
+    elif pos.type == mt5.POSITION_TYPE_SELL:
+        order_type = mt5.ORDER_TYPE_BUY
+        price = mt5.symbol_info_tick(symbol).ask
+    else:
+        raise RuntimeError("Unknown position type")
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": lot,
+        "type": order_type,
+        "position": ticket,
+        "price": price,
+        "deviation": 20,
+        "magic": 0,
+        "comment": "",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+    result = mt5.order_send(request)
+    mt5.shutdown()
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        raise RuntimeError(f"Order close failed: {result.retcode} {result.comment}")
+    return {"status": "ok", "order": result._asdict()}
 # =============================================
 # Penjelasan singkat keyword, API, dan library:
 #

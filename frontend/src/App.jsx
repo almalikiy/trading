@@ -100,9 +100,21 @@ function getBackendUrl(engine, type = 'http') {
 const WS_URL = getBackendUrl('mt5', 'ws');
 
 export default function App() {
+  // Backend account state (real balance, etc)
+  const [accountState, setAccountState] = useState({ balance: 0, initial_balance: 0, lot: 0.01, max_open_trades: 1, history: [] });
+      // Fetch backend account state on mount and when needed
+      useEffect(() => {
+        const fetchAccountState = () => {
+          fetch("http://localhost:8000/account/state")
+            .then(res => res.json())
+            .then(data => setAccountState(data));
+        };
+        fetchAccountState();
+        // Listen for enable_real_trade changes from AccountMonitor
+        const interval = setInterval(fetchAccountState, 2000);
+        return () => clearInterval(interval);
+      }, []);
     const navigate = useNavigate();
-    <Button variant="contained" color="primary" sx={{ml:2}} onClick={() => navigate("/history")}>Trade History</Button>
-    <Button variant="outlined" color="primary" sx={{ml:2}} onClick={() => navigate("/account")}>Account Monitor</Button>
   // --- Strategy Preset & Indicator Params State ---
   const [selectedPreset, setSelectedPreset] = useState('scalp_cepat');
   const [indicatorParams, setIndicatorParams] = useState(strategyPresets[0].params);
@@ -111,6 +123,24 @@ export default function App() {
 
   // --- Analytic TP/SL toggle state ---
   const [autoTPSL, setAutoTPSL] = useState(false);
+
+  // Fetch autoTPSL from backend on mount
+  useEffect(() => {
+    fetch("http://localhost:8000/account/state")
+      .then(res => res.json())
+      .then(data => {
+        if (typeof data.auto_analytic_tpsl === 'boolean') setAutoTPSL(data.auto_analytic_tpsl);
+      });
+  }, []);
+
+  // Persist autoTPSL to backend whenever it changes
+  useEffect(() => {
+    fetch("http://localhost:8000/account/set_auto_analytic_tpsl", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(autoTPSL)
+    });
+  }, [autoTPSL]);
   const [enableReversalWarning, setEnableReversalWarning] = useState(true);
   const [reversalWarning, setReversalWarning] = useState("");
   // State for checklist and custom TP/SL value
@@ -598,63 +628,68 @@ export default function App() {
   // const chartOptions = { ... };
 
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <Box sx={{ p: { xs: 1, sm: 2 }, maxWidth: 1200, mx: 'auto', width: '100%' }}>
-      <Snackbar open={snackbarOpen} autoHideDuration={2500} onClose={() => setSnackbarOpen(false)} anchorOrigin={{vertical:'bottom',horizontal:'center'}}>
-        <MuiAlert onClose={() => setSnackbarOpen(false)} severity={signal === 'buy' ? 'success' : 'info'} sx={{ width: '100%' }}>
-          {snackbarMsg}
-        </MuiAlert>
-      </Snackbar>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-        <Typography variant="h4" gutterBottom>
-          Trading Signal Dashboard
-        </Typography>
-        <Button variant="outlined" color="secondary" sx={{ml:2}} onClick={() => {
-          if (canLateFollow(signal, lastSignalTime, ohlcv, 60)) {
-            setLateFollowMsg('Still safe to late follow this signal (<= 60 seconds).');
-          } else {
-            setLateFollowMsg('Too late/not recommended to late follow.');
-          }
-        }}>
-          Check for Late Follow
-        </Button>
-        {lateFollowMsg && (
-          <Typography variant="body2" color={lateFollowMsg.includes('safe') ? 'green' : 'red'} sx={{ml:2, mt:1}}>
-            {lateFollowMsg}
-          </Typography>
-        )}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-          <FormControl size="small" sx={{ minWidth: 120 }}>
-            <InputLabel id="engine-label">Engine</InputLabel>
-            <Select
-              labelId="engine-label"
-              value={engine}
-              label="Engine"
-              onChange={e => setEngine(e.target.value)}
-            >
-              <MenuItem value="mt5">MT5 (Live)</MenuItem>
-              <MenuItem value="sim">Simulation</MenuItem>
-            </Select>
-          </FormControl>
-          <FormControl size="small" sx={{ minWidth: 120 }}>
-            <InputLabel id="trade-mode-label">Mode</InputLabel>
-            <Select
-              labelId="trade-mode-label"
-              value={tradeMode}
-              label="Mode"
-              onChange={e => setTradeMode(e.target.value)}
-            >
-              <MenuItem value="normal">Normal</MenuItem>
-              <MenuItem value="scalp">Scalp</MenuItem>
-            </Select>
-          </FormControl>
-          <FormControlLabel
-            control={<Switch checked={darkMode} onChange={() => setDarkMode(v => !v)} color="primary" />}
-            label={darkMode ? 'Dark Mode' : 'Light Mode'}
-          />
-        </Box>
+    <>
+      <Box sx={{ display: 'flex', gap: 2, mb: 2, justifyContent: 'flex-end' }}>
+        <Button variant="contained" color="primary" onClick={() => navigate("/history")}>Trade History</Button>
+        <Button variant="outlined" color="primary" onClick={() => navigate("/account")}>Account Monitor</Button>
       </Box>
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <Box sx={{ p: { xs: 1, sm: 2 }, maxWidth: 1200, mx: 'auto', width: '100%' }}>
+          <Snackbar open={snackbarOpen} autoHideDuration={2500} onClose={() => setSnackbarOpen(false)} anchorOrigin={{vertical:'bottom',horizontal:'center'}}>
+            <MuiAlert onClose={() => setSnackbarOpen(false)} severity={signal === 'buy' ? 'success' : 'info'} sx={{ width: '100%' }}>
+              {snackbarMsg}
+            </MuiAlert>
+          </Snackbar>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+            <Typography variant="h4" gutterBottom>
+              Trading Signal Dashboard
+            </Typography>
+            <Button variant="outlined" color="secondary" sx={{ml:2}} onClick={() => {
+              if (canLateFollow(signal, lastSignalTime, ohlcv, 60)) {
+                setLateFollowMsg('Still safe to late follow this signal (<= 60 seconds).');
+              } else {
+                setLateFollowMsg('Too late/not recommended to late follow.');
+              }
+            }}>
+              Check for Late Follow
+            </Button>
+            {lateFollowMsg && (
+              <Typography variant="body2" color={lateFollowMsg.includes('safe') ? 'green' : 'red'} sx={{ml:2, mt:1}}>
+                {lateFollowMsg}
+              </Typography>
+            )}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <FormControl size="small" sx={{ minWidth: 120 }}>
+                <InputLabel id="engine-label">Engine</InputLabel>
+                <Select
+                  labelId="engine-label"
+                  value={engine}
+                  label="Engine"
+                  onChange={e => setEngine(e.target.value)}
+                >
+                  <MenuItem value="mt5">MT5 (Live)</MenuItem>
+                  <MenuItem value="sim">Simulation</MenuItem>
+                </Select>
+              </FormControl>
+              <FormControl size="small" sx={{ minWidth: 120 }}>
+                <InputLabel id="trade-mode-label">Mode</InputLabel>
+                <Select
+                  labelId="trade-mode-label"
+                  value={tradeMode}
+                  label="Mode"
+                  onChange={e => setTradeMode(e.target.value)}
+                >
+                  <MenuItem value="normal">Normal</MenuItem>
+                  <MenuItem value="scalp">Scalp</MenuItem>
+                </Select>
+              </FormControl>
+              <FormControlLabel
+                control={<Switch checked={darkMode} onChange={() => setDarkMode(v => !v)} color="primary" />}
+                label={darkMode ? 'Dark Mode' : 'Light Mode'}
+              />
+            </Box>
+          </Box>
 
       {/* Panel Preset Strategi & Parameter */}
       <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 2, mt: 2 }}>
@@ -834,11 +869,18 @@ export default function App() {
           </Box>
           {/* Right Simulation Panel */}
           <Box sx={{ flex: 1, minWidth: 0, borderLeft: { md: '1px solid #eee' }, pl: { md: 2, xs: 0 }, mt: { xs: 2, md: 0 } }}>
-            <Typography variant="subtitle1" sx={{ fontWeight:'bold', letterSpacing:1, mb: 1 }}>Automatic Simulation (Follow Signal, 0.01 lot)</Typography>
+            <Typography variant="subtitle1" sx={{ fontWeight:'bold', letterSpacing:1, mb: 1 }}>Trading Panel (Follow Signal, 0.01 lot)</Typography>
             <Typography variant="body2">
-              Balance: <span style={{color: simu && simu.balance < 0 ? 'red' : undefined}}>{simu && typeof simu.balance === 'number' ? `$${simu.balance.toFixed(2)}` : '-'}</span> |
-              Floating PnL: <span style={{color: simu && simu.pnl < 0 ? 'red' : undefined}}>{simu && typeof simu.pnl === 'number' ? simu.pnl.toFixed(2) : '-'}</span> |
-              Open Trade: {simu && simu.openTrade ? (simu.direction === 'buy' ? 'Buy' : 'Sell') : 'No'}
+              Balance: <span style={{color: accountState && accountState.balance < 0 ? 'red' : undefined}}>{
+                accountState && typeof accountState.balance === 'number'
+                  ? `$${accountState.balance.toFixed(2)}`
+                  : '$1000.00'
+              }</span>
+              {' | '}Mode: <b style={{color: accountState && accountState.enable_real_trade ? '#1b5e20' : '#888'}}>
+                {accountState && accountState.enable_real_trade ? 'REAL (MT5)' : 'SIMULATION'}
+              </b>
+              {' | '}Floating PnL: <span style={{color: simu && simu.pnl < 0 ? 'red' : undefined}}>{simu && typeof simu.pnl === 'number' ? simu.pnl.toFixed(2) : '-'}</span>
+              {' | '}Open Trade: {simu && simu.openTrade ? (simu.direction === 'buy' ? 'Buy' : 'Sell') : 'No'}
             </Typography>
             {/* Checklist and custom TP input */}
             <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, gap: 2 }}>
@@ -1292,5 +1334,6 @@ export default function App() {
       </Paper>
       </Box>
     </ThemeProvider>
+    </>
   );
 }

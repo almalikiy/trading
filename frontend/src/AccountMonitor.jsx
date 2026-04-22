@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Box, Typography, Paper, Button, TextField, Grid, Switch, FormControlLabel } from "@mui/material";
 
+
 export default function AccountMonitor() {
   const [state, setState] = useState({ balance: 0, initial_balance: 0, lot: 0.01, max_open_trades: 1, history: [] });
   const [deposit, setDeposit] = useState(0);
@@ -10,13 +11,39 @@ export default function AccountMonitor() {
   const [initBalance, setInitBalance] = useState(0);
   const [lot, setLot] = useState(0.01);
   const [maxOpen, setMaxOpen] = useState(1);
-  const [enableMT5, setEnableMT5] = useState(false);
+  const [enableMT5, setEnableMT5] = useState(() => {
+    // Use backend value if available, fallback to localStorage
+    const stored = localStorage.getItem('enableMT5');
+    return stored === null ? false : stored === 'true';
+  });
+
+  // Fetch enable_real_trade from backend on mount
+  useEffect(() => {
+    fetch("http://localhost:8000/account/state")
+      .then(res => res.json())
+      .then(data => {
+        setState(data);
+        if (typeof data.enable_real_trade === 'boolean') {
+          setEnableMT5(data.enable_real_trade);
+        }
+      });
+  }, []);
 
   useEffect(() => {
     fetch("http://localhost:8000/account/state")
       .then(res => res.json())
       .then(data => setState(data));
   }, []);
+
+  // Persist enableMT5 to localStorage and backend whenever it changes
+  useEffect(() => {
+    localStorage.setItem('enableMT5', enableMT5);
+    fetch("http://localhost:8000/account/set_enable_real_trade", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(enableMT5)
+    });
+  }, [enableMT5]);
 
   const handleDeposit = () => {
     fetch("http://localhost:8000/account/deposit", {
