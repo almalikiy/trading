@@ -2,11 +2,32 @@
 from fastapi import APIRouter, Request, Query, Body
 import os
 import json
+router = APIRouter()
+from .logic import log_mt5_error, load_mt5_error_log
+
+router = APIRouter()
+
+
+# Endpoint: Status koneksi backend ke MT5
+@router.get("/mt5/status")
+def mt5_status():
+    import MetaTrader5 as mt5
+    status = mt5.initialize()
+    if status:
+        mt5.shutdown()
+    return {"connected": bool(status)}
+
+# Endpoint: Ambil log error MT5
+@router.get("/mt5/error_log")
+def mt5_error_log():
+    log = load_mt5_error_log()
+    # Urutkan dari terbaru ke terlama
+    log = sorted(log, key=lambda x: x["timestamp"], reverse=True)
+    return log
+
 
 TRADE_HISTORY_FILE = "trade_history.json"
 from .logic import open_real_trade, close_real_trade, analyze_symbol
-
-router = APIRouter()
 
 # === Real Trade Execution Endpoints ===
 @router.post("/trade/open")
@@ -27,6 +48,38 @@ def open_trade(symbol: str = Body(...), lot: float = Body(0.01), trade_type: str
         result = open_real_trade(symbol, lot, trade_type)
         return result
     except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# Endpoint: Force close all open trades (for emergency/manual fix)
+@router.post("/trade/force_close")
+def force_close_all_trades():
+    """
+    Force close all open trades on MT5. Use if trade stuck open due to backend error.
+    """
+    import MetaTrader5 as mt5
+    if not account_state.get("enable_real_trade", False):
+        return {"status": "error", "message": "Real trading not enabled"}
+    if not mt5.initialize():
+        return {"status": "error", "message": "MT5 not connected"}
+    try:
+        positions = mt5.positions_get()
+        closed = []
+        errors = []
+        if positions:
+            for pos in positions:
+                symbol = pos.symbol
+                lot = pos.volume
+                ticket = pos.ticket
+                try:
+                    result = close_real_trade(symbol, lot, ticket)
+                    closed.append({"symbol": symbol, "ticket": ticket, "result": result})
+                except Exception as e:
+                    errors.append({"symbol": symbol, "ticket": ticket, "error": str(e)})
+        mt5.shutdown()
+        return {"status": "ok", "closed": closed, "errors": errors}
+    except Exception as e:
+        mt5.shutdown()
         return {"status": "error", "message": str(e)}
 
 @router.post("/trade/close")

@@ -1,6 +1,38 @@
+# === MT5 Error Logging ===
+import threading
+import json
+import os
+MT5_ERROR_LOG_FILE = os.path.join(os.path.dirname(__file__), "mt5_error_log.json")
+_mt5_error_lock = threading.Lock()
+
+def log_mt5_error(message):
+    entry = {"timestamp": int(time.time()), "message": message}
+    with _mt5_error_lock:
+        try:
+            if os.path.exists(MT5_ERROR_LOG_FILE):
+                with open(MT5_ERROR_LOG_FILE, "r", encoding="utf-8") as f:
+                    log = json.load(f)
+            else:
+                log = []
+        except Exception:
+            log = []
+        log.append(entry)
+        with open(MT5_ERROR_LOG_FILE, "w", encoding="utf-8") as f:
+            json.dump(log, f, ensure_ascii=False)
+
+def load_mt5_error_log():
+    with _mt5_error_lock:
+        try:
+            if os.path.exists(MT5_ERROR_LOG_FILE):
+                with open(MT5_ERROR_LOG_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            return []
+    return []
 # === Real Trade Execution Logic ===
 def open_real_trade(symbol, lot, trade_type):
     if not mt5.initialize():
+        log_mt5_error("MT5 not connected (open_real_trade)")
         raise RuntimeError("MT5 not connected")
     if trade_type == 'buy':
         order_type = mt5.ORDER_TYPE_BUY
@@ -24,14 +56,17 @@ def open_real_trade(symbol, lot, trade_type):
     result = mt5.order_send(request)
     mt5.shutdown()
     if result.retcode != mt5.TRADE_RETCODE_DONE:
+        log_mt5_error(f"Order send failed: {result.retcode} {result.comment}")
         raise RuntimeError(f"Order send failed: {result.retcode} {result.comment}")
     return {"status": "ok", "order": result._asdict()}
 
 def close_real_trade(symbol, lot, ticket):
     if not mt5.initialize():
+        log_mt5_error("MT5 not connected (close_real_trade)")
         raise RuntimeError("MT5 not connected")
     position = mt5.positions_get(ticket=ticket)
     if not position:
+        log_mt5_error(f"No open position with ticket {ticket}")
         raise RuntimeError(f"No open position with ticket {ticket}")
     pos = position[0]
     if pos.type == mt5.POSITION_TYPE_BUY:
@@ -58,6 +93,7 @@ def close_real_trade(symbol, lot, ticket):
     result = mt5.order_send(request)
     mt5.shutdown()
     if result.retcode != mt5.TRADE_RETCODE_DONE:
+        log_mt5_error(f"Order close failed: {result.retcode} {result.comment}")
         raise RuntimeError(f"Order close failed: {result.retcode} {result.comment}")
     return {"status": "ok", "order": result._asdict()}
 # =============================================

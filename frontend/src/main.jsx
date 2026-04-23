@@ -1,6 +1,8 @@
 
 import React from "react";
 import ReactDOM from "react-dom/client";
+import Layout from "./layout";
+
 import App from "./App";
 import TradeHistory from "./TradeHistory";
 import AccountMonitor from "./AccountMonitor";
@@ -11,11 +13,13 @@ ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <CssBaseline />
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<App />} />
-        <Route path="/history" element={<TradeHistory />} />
-        <Route path="/account" element={<AccountMonitor />} />
-      </Routes>
+      <Layout>
+        <Routes>
+          <Route path="/" element={<App />} />
+          <Route path="/history" element={<TradeHistory />} />
+          <Route path="/account" element={<AccountMonitor />} />
+        </Routes>
+      </Layout>
     </BrowserRouter>
   </React.StrictMode>
 );

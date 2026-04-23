@@ -629,10 +629,6 @@ export default function App() {
 
   return (
     <>
-      <Box sx={{ display: 'flex', gap: 2, mb: 2, justifyContent: 'flex-end' }}>
-        <Button variant="contained" color="primary" onClick={() => navigate("/history")}>Trade History</Button>
-        <Button variant="outlined" color="primary" onClick={() => navigate("/account")}>Account Monitor</Button>
-      </Box>
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <Box sx={{ p: { xs: 1, sm: 2 }, maxWidth: 1200, mx: 'auto', width: '100%' }}>
