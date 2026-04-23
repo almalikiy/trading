@@ -96,7 +96,14 @@ export default function TradeHistory() {
 
       {/* Panel Error Log MT5 */}
       <Paper sx={{ mb: 2, p: 2 }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1 }}>MT5 Error Log</Typography>
+        <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1 }}>
+          MT5 Error Log
+          {(!loading && errorLog.length > 0) && (
+            <span style={{ color: '#d32f2f', fontWeight: 400, marginLeft: 12, fontSize: 14 }}>
+              {errorLog[0].message}
+            </span>
+          )}
+        </Typography>
         {loading ? <CircularProgress size={20} /> : (
           errorLog.length === 0 ? (
             <Typography variant="body2" color="text.secondary">No MT5 errors recorded.</Typography>

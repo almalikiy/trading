@@ -102,34 +102,38 @@ const WS_URL = getBackendUrl('mt5', 'ws');
 export default function App() {
   // Backend account state (real balance, etc)
   const [accountState, setAccountState] = useState({ balance: 0, initial_balance: 0, lot: 0.01, max_open_trades: 1, history: [] });
-      // Fetch backend account state on mount and when needed
-      useEffect(() => {
-        const fetchAccountState = () => {
-          fetch("http://localhost:8000/account/state")
-            .then(res => res.json())
-            .then(data => setAccountState(data));
-        };
-        fetchAccountState();
-        // Listen for enable_real_trade changes from AccountMonitor
-        const interval = setInterval(fetchAccountState, 2000);
-        return () => clearInterval(interval);
-      }, []);
-    const navigate = useNavigate();
+  // Fetch backend account state on mount and when needed
+  useEffect(() => {
+    const fetchAccountState = () => {
+      fetch("http://localhost:8000/account/state")
+        .then(res => res.json())
+        .then(data => setAccountState(data));
+    };
+    fetchAccountState();
+    // Listen for enable_real_trade changes from AccountMonitor
+    const interval = setInterval(fetchAccountState, 2000);
+    return () => clearInterval(interval);
+  }, []);
+  const navigate = useNavigate();
   // --- Strategy Preset & Indicator Params State ---
   const [selectedPreset, setSelectedPreset] = useState('scalp_cepat');
   const [indicatorParams, setIndicatorParams] = useState(strategyPresets[0].params);
 
   const [tradeMode, setTradeMode] = useState('scalp'); // default: scalp mode
 
-  // --- Analytic TP/SL toggle state ---
+  // --- Analytic TP/SL toggle state & value (from backend) ---
   const [autoTPSL, setAutoTPSL] = useState(false);
+  const [tpValue, setTpValue] = useState(0.5);
+  const [slValue, setSlValue] = useState(null);
 
-  // Fetch autoTPSL from backend on mount
+  // Fetch TP/SL & autoTPSL from backend on mount
   useEffect(() => {
     fetch("http://localhost:8000/account/state")
       .then(res => res.json())
       .then(data => {
         if (typeof data.auto_analytic_tpsl === 'boolean') setAutoTPSL(data.auto_analytic_tpsl);
+        if (typeof data.tp_value === 'number') setTpValue(data.tp_value);
+        if (typeof data.sl_value === 'number' || data.sl_value === null) setSlValue(data.sl_value);
       });
   }, []);
 
@@ -141,6 +145,15 @@ export default function App() {
       body: JSON.stringify(autoTPSL)
     });
   }, [autoTPSL]);
+
+  // Persist TP/SL value to backend whenever it changes
+  useEffect(() => {
+    fetch("http://localhost:8000/account/set_analytic_tpsl", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tp_value: tpValue, sl_value: slValue })
+    });
+  }, [tpValue, slValue]);
   const [enableReversalWarning, setEnableReversalWarning] = useState(true);
   const [reversalWarning, setReversalWarning] = useState("");
   // State for checklist and custom TP/SL value
@@ -878,33 +891,65 @@ export default function App() {
               {' | '}Floating PnL: <span style={{color: simu && simu.pnl < 0 ? 'red' : undefined}}>{simu && typeof simu.pnl === 'number' ? simu.pnl.toFixed(2) : '-'}</span>
               {' | '}Open Trade: {simu && simu.openTrade ? (simu.direction === 'buy' ? 'Buy' : 'Sell') : 'No'}
             </Typography>
+            {/* Tombol Buy/Sell manual */}
+            <Box sx={{ display: 'flex', gap: 2, mt: 2 }}>
+              <Button
+                variant="contained"
+                color="success"
+                disabled={simu && simu.openTrade}
+                onClick={async () => {
+                  if (accountState && accountState.enable_real_trade) {
+                    // Real trade ke MT5
+                    await fetch(`${getBackendUrl('mt5', 'http')}/trade/open`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ symbol, lot: accountState.lot || 0.01, trade_type: 'buy', signal_time: Math.floor(Date.now()/1000) })
+                    });
+                  } else {
+                    // Simulasi: trigger open buy
+                    setSignal('buy');
+                  }
+                }}
+              >Buy</Button>
+              <Button
+                variant="contained"
+                color="error"
+                disabled={simu && simu.openTrade}
+                onClick={async () => {
+                  if (accountState && accountState.enable_real_trade) {
+                    // Real trade ke MT5
+                    await fetch(`${getBackendUrl('mt5', 'http')}/trade/open`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ symbol, lot: accountState.lot || 0.01, trade_type: 'sell', signal_time: Math.floor(Date.now()/1000) })
+                    });
+                  } else {
+                    // Simulasi: trigger open sell
+                    setSignal('sell');
+                  }
+                }}
+              >Sell</Button>
+            </Box>
             {/* Checklist and custom TP input */}
             <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, gap: 2 }}>
-              <Checkbox checked={useCustomTP} onChange={e => setUseCustomTP(e.target.checked)} />
-              <Typography variant="body2">Set</Typography>
               <TextField
                 label="TP Value"
                 size="small"
                 type="number"
-                value={customTP}
-                onChange={e => {6
-                  setCustomTP(Number(e.target.value));
-                  setCustomTPManuallySet(true);
-                }}
+                value={tpValue}
+                onChange={e => setTpValue(Number(e.target.value))}
                 sx={{ width: 200 }}
-                disabled={!useCustomTP || autoTPSL}
+                disabled={autoTPSL}
                 inputProps={{ step: 0.1 }}
               />
-              <Checkbox checked={useCustomSL} onChange={e => setUseCustomSL(e.target.checked)} sx={{ml:2}} />
-              <Typography variant="body2">Set</Typography>
               <TextField
                 label="SL Value"
                 size="small"
                 type="number"
-                value={customSL}
-                onChange={e => setCustomSL(Number(e.target.value))}
-                sx={{ width: 200 }}
-                disabled={!useCustomSL || autoTPSL}
+                value={slValue ?? ''}
+                onChange={e => setSlValue(e.target.value === '' ? null : Number(e.target.value))}
+                sx={{ width: 200, ml: 2 }}
+                disabled={autoTPSL}
                 inputProps={{ step: 0.1 }}
               />
               <FormControlLabel

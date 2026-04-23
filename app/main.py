@@ -4,7 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 
 from .signal_ws import signal_stream
+
 from .routes import router
+from .sim_engine import start_simulation_thread
 app = FastAPI()
 
 app.add_middleware(
@@ -15,7 +17,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 app.include_router(router)
+
+# Start simulation thread on startup
+@app.on_event("startup")
+def startup_event():
+    start_simulation_thread()
 
 @app.get("/")
 def root():
