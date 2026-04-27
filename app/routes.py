@@ -4,7 +4,7 @@ import json
 router = APIRouter()
 from .logic import log_mt5_error, load_mt5_error_log
 import subprocess
-
+from pydantic import BaseModel
 
 # === Analytic TP/SL Logic ===
 ACCOUNT_STATE_FILE = "account_state.json"
@@ -33,21 +33,38 @@ def get_account_state():
     return load_account_state()
 
 # Endpoint: Set analytic TP/SL value
+class AnalyticTPSLRequest(BaseModel):
+    tp_value: float
+    sl_value: float | None = None
+
 @router.post("/account/set_analytic_tpsl")
-def set_analytic_tpsl(tp_value: float = Body(...), sl_value: float = Body(None)):
-    state = load_account_state()
-    state["tp_value"] = tp_value
-    state["sl_value"] = sl_value
-    save_account_state(state)
-    return {"status": "ok", "tp_value": tp_value, "sl_value": sl_value}
+def set_analytic_tpsl(request: AnalyticTPSLRequest):
+    try:
+        state = load_account_state()
+        state["tp_value"] = request.tp_value
+        state["sl_value"] = request.sl_value
+        save_account_state(state)
+        return {"status": "ok", "tp_value": request.tp_value, "sl_value": request.sl_value}
+    except Exception as e:
+        import traceback
+        print("Error in set_analytic_tpsl:", traceback.format_exc())
+        return {"status": "error", "detail": str(e)}
+    
+class AutoTPSLRequest(BaseModel):
+    enabled: bool
 
 # Endpoint: Toggle auto analytic TP/SL
 @router.post("/account/set_auto_analytic_tpsl")
-def set_auto_analytic_tpsl(enabled: bool = Body(...)):
-    state = load_account_state()
-    state["auto_analytic_tpsl"] = enabled
-    save_account_state(state)
-    return {"status": "ok", "auto_analytic_tpsl": enabled}
+def set_auto_analytic_tpsl(request: AutoTPSLRequest):
+    try:
+        state = load_account_state()
+        state["auto_analytic_tpsl"] = request.enabled
+        save_account_state(state)
+        return {"status": "ok", "auto_analytic_tpsl": request.enabled}
+    except Exception as e:
+        import traceback
+        print("Error in set_auto_analytic_tpsl:", traceback.format_exc())
+        return {"status": "error", "detail": str(e)}        
 
 
 # === Trading Order Method ===

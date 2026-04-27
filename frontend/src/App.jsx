@@ -84,12 +84,12 @@ const strategyPresets = [
 // === Backend URL Config ===
 const BACKEND_URLS = {
   mt5: {
-    http: "http://localhost:8000",
-    ws: "ws://localhost:8000/ws/signal"
+    http: import.meta.env.VITE_BACKEND_URL,
+    ws: import.meta.env.VITE_BACKEND_WS_URL
   },
-  sim: {
-    http: "http://localhost:8001",
-    ws: "ws://localhost:8001/ws/signal"
+  sim: { // not yet impelemented, fallback ke mt5
+    http: "http://localhost:8002",
+    ws: "ws://localhost:8002/ws/signal"
   }
 };
 
@@ -105,7 +105,7 @@ export default function App() {
   // Fetch backend account state on mount and when needed
   useEffect(() => {
     const fetchAccountState = () => {
-      fetch("http://localhost:8000/account/state")
+      fetch(`${getBackendUrl('mt5', 'http')}/account/state`)
         .then(res => res.json())
         .then(data => setAccountState(data));
     };
@@ -128,7 +128,7 @@ export default function App() {
 
   // Fetch TP/SL & autoTPSL from backend on mount
   useEffect(() => {
-    fetch("http://localhost:8000/account/state")
+    fetch(`${getBackendUrl('mt5', 'http')}/account/state`)
       .then(res => res.json())
       .then(data => {
         if (typeof data.auto_analytic_tpsl === 'boolean') setAutoTPSL(data.auto_analytic_tpsl);
@@ -139,16 +139,16 @@ export default function App() {
 
   // Persist autoTPSL to backend whenever it changes
   useEffect(() => {
-    fetch("http://localhost:8000/account/set_auto_analytic_tpsl", {
+    fetch(`${getBackendUrl('mt5', 'http')}/account/set_auto_analytic_tpsl`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(autoTPSL)
+      body: JSON.stringify({ enabled: autoTPSL })
     });
   }, [autoTPSL]);
 
   // Persist TP/SL value to backend whenever it changes
   useEffect(() => {
-    fetch("http://localhost:8000/account/set_analytic_tpsl", {
+    fetch(`${getBackendUrl('mt5', 'http')}/account/set_analytic_tpsl`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ tp_value: tpValue, sl_value: slValue })
