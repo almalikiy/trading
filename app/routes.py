@@ -1,36 +1,16 @@
 from fastapi import APIRouter, Request, Query, Body
-import os
-import json
+from .db import get_account_state, save_account_state
 router = APIRouter()
-from .logic import log_mt5_error, load_mt5_error_log
+from .logic import log_mt5_error
 import subprocess
 from pydantic import BaseModel
 
 # === Analytic TP/SL Logic ===
-ACCOUNT_STATE_FILE = "account_state.json"
-def load_account_state():
-    if os.path.exists(ACCOUNT_STATE_FILE):
-        with open(ACCOUNT_STATE_FILE, "r") as f:
-            state = json.load(f)
-            if "enable_real_trade" not in state:
-                state["enable_real_trade"] = False
-            if "auto_analytic_tpsl" not in state:
-                state["auto_analytic_tpsl"] = False
-            if "tp_value" not in state:
-                state["tp_value"] = 0.5
-            if "sl_value" not in state:
-                state["sl_value"] = None
-            return state
-    return {"balance": 1000, "enable_real_trade": False, "auto_analytic_tpsl": False, "tp_value": 0.5, "sl_value": None}
-
-def save_account_state(state):
-    with open(ACCOUNT_STATE_FILE, "w") as f:
-        json.dump(state, f)
 
 # Endpoint: Get analytic TP/SL state
 @router.get("/account/state")
-def get_account_state():
-    return load_account_state()
+def get_account_state_route():
+    return get_account_state()
 
 # Endpoint: Set analytic TP/SL value
 class AnalyticTPSLRequest(BaseModel):
@@ -40,7 +20,7 @@ class AnalyticTPSLRequest(BaseModel):
 @router.post("/account/set_analytic_tpsl")
 def set_analytic_tpsl(request: AnalyticTPSLRequest):
     try:
-        state = load_account_state()
+        state = get_account_state()
         state["tp_value"] = request.tp_value
         state["sl_value"] = request.sl_value
         save_account_state(state)
@@ -57,7 +37,7 @@ class AutoTPSLRequest(BaseModel):
 @router.post("/account/set_auto_analytic_tpsl")
 def set_auto_analytic_tpsl(request: AutoTPSLRequest):
     try:
-        state = load_account_state()
+        state = get_account_state()
         state["auto_analytic_tpsl"] = request.enabled
         save_account_state(state)
         return {"status": "ok", "auto_analytic_tpsl": request.enabled}
@@ -124,10 +104,8 @@ def mt5_status():
 
 @router.get("/mt5/error_log")
 def mt5_error_log():
-    log = load_mt5_error_log()
-    # Urutkan dari terbaru ke terlama
-    log = sorted(log, key=lambda x: x["timestamp"], reverse=True)
-    return log
+    from .db import get_mt5_error_log
+    return get_mt5_error_log()
 
 
 TRADE_HISTORY_FILE = "trade_history.json"
@@ -141,7 +119,8 @@ def open_trade(symbol: str = Body(...), lot: float = Body(0.01), trade_type: str
     Only executes if enable_real_trade is True and signal is not expired.
     """
     import time
-    if not account_state.get("enable_real_trade", False):
+    state = get_account_state()
+    if not state.get("enable_real_trade", False):
         return {"status": "error", "message": "Real trading not enabled"}
     # Check signal timeliness (default max 60s)
     if signal_time is not None:
@@ -165,7 +144,6 @@ def open_trade(symbol: str = Body(...), lot: float = Body(0.01), trade_type: str
             entry_price = order.get("price", None)
         entry_time = int(time.time())
         # --- TP/SL Value: auto hitung jika auto_analytic_tpsl aktif ---
-        state = load_account_state()
         tp_value = state.get("tp_value", 0.5)
         sl_value = state.get("sl_value", None)
         if state.get("auto_analytic_tpsl", False):
@@ -187,9 +165,6 @@ def open_trade(symbol: str = Body(...), lot: float = Body(0.01), trade_type: str
             "tpValue": tp_value,
             "slValue": sl_value
         }
-        trade_history.append(trade)
-        save_trade_history()
-        # --- Update user_open_trade ---
         user_id = result.get("user_id", "default")
         user_open_trade[user_id] = user_open_trade.get(user_id, {
             "balance": 1000,
@@ -219,7 +194,8 @@ def force_close_all_trades():
     """
     import MetaTrader5 as mt5
     import time
-    if not account_state.get("enable_real_trade", False):
+    state = get_account_state()
+    if not state.get("enable_real_trade", False):
         return {"status": "error", "message": "Real trading not enabled"}
     if not mt5.initialize():
         return {"status": "error", "message": "MT5 not connected"}
@@ -254,25 +230,6 @@ def force_close_all_trades():
                     })
                     save_trade_history()
                     closed.append({"symbol": symbol, "ticket": ticket, "result": result})
-    
-                    # --- Simulation Endpoints ---
-                    @router.get("/sim/state")
-                    def get_sim_state():
-                        with sim_lock:
-                            return sim_state.copy()
-
-                    @router.get("/sim/settings")
-                    def get_sim_settings():
-                        with sim_lock:
-                            return sim_settings.copy()
-
-                    @router.post("/sim/settings")
-                    def update_sim_settings(settings: dict = Body(...)):
-                        with sim_lock:
-                            sim_settings.update(settings)
-                            save_sim_settings()
-                        return {"status": "ok", "settings": sim_settings}
-
                 except Exception as e:
                     errors.append({"symbol": symbol, "ticket": ticket, "error": str(e)})
         # Clear all user open trades (so frontend sees no active trade)
@@ -325,31 +282,6 @@ def close_trade(symbol: str = Body(...), lot: float = Body(0.01), ticket: int = 
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-ACCOUNT_STATE_FILE = "account_state.json"
-def load_account_state():
-    if os.path.exists(ACCOUNT_STATE_FILE):
-        with open(ACCOUNT_STATE_FILE, "r") as f:
-            state = json.load(f)
-            if "enable_real_trade" not in state:
-                state["enable_real_trade"] = False
-            if "auto_analytic_tpsl" not in state:
-                state["auto_analytic_tpsl"] = False
-            return state
-    return {
-        "balance": 1000.0,
-        "initial_balance": 1000.0,
-        "lot": 0.01,
-        "max_open_trades": 1,
-        "history": [],
-        "enable_real_trade": False,
-        "auto_analytic_tpsl": False,
-    }
-# Endpoint to set auto_analytic_tpsl
-@router.post("/account/set_auto_analytic_tpsl")
-def set_auto_analytic_tpsl(enabled: bool = Body(...)):
-    account_state["auto_analytic_tpsl"] = enabled
-    save_account_state()
-    return {"status": "ok", "auto_analytic_tpsl": enabled}
 
 # Endpoint to set enable_real_trade
 @router.post("/account/set_enable_real_trade")
@@ -358,74 +290,62 @@ def set_enable_real_trade(enabled: bool = Body(...)):
     save_account_state()
     return {"status": "ok", "enable_real_trade": enabled}
 
-def save_account_state():
-    with open(ACCOUNT_STATE_FILE, "w") as f:
-        json.dump(account_state, f)
 
-
-
-# In-memory user open trade storage (for demo; replace with DB in production)
 user_open_trade = {}
-def load_trade_history():
-    if os.path.exists(TRADE_HISTORY_FILE):
-        with open(TRADE_HISTORY_FILE, "r") as f:
-            return json.load(f)
-    return []
 
-def save_trade_history():
-    with open(TRADE_HISTORY_FILE, "w") as f:
-        json.dump(trade_history, f)
-
-# In-memory trade history (all closed trades)
-trade_history = load_trade_history()
-# In-memory balance and settings (single account, no user management)
-account_state = load_account_state()
-# --- Balance & Account Management Endpoints ---
-@router.get("/account/state")
-def get_account_state():
-    return account_state
 
 @router.post("/account/set_initial_balance")
 def set_initial_balance(amount: float = Body(...)):
-    account_state["initial_balance"] = amount
-    account_state["balance"] = amount
-    save_account_state()
-    save_account_state()
-    return {"status": "ok", "balance": account_state["balance"]}
+    state = get_account_state()
+    state["initial_balance"] = amount
+    state["balance"] = amount
+    save_account_state(state)
+    return {"status": "ok", "balance": state["balance"]}
 
 @router.post("/account/deposit")
 def deposit(amount: float = Body(...)):
-    account_state["balance"] += amount
-    account_state["history"].append({"type": "deposit", "amount": amount})
-    save_account_state()
-    return {"status": "ok", "balance": account_state["balance"]}
+    state = get_account_state()
+    state["balance"] += amount
+    if "history" not in state:
+        state["history"] = []
+    state["history"].append({"type": "deposit", "amount": amount})
+    save_account_state(state)
+    return {"status": "ok", "balance": state["balance"]}
 
 @router.post("/account/withdraw")
 def withdraw(amount: float = Body(...)):
-    if amount > account_state["balance"]:
+    state = get_account_state()
+    if amount > state["balance"]:
         return {"status": "error", "message": "Insufficient balance"}
-    account_state["balance"] -= amount
-    account_state["history"].append({"type": "withdraw", "amount": amount})
-    save_account_state()
-    return {"status": "ok", "balance": account_state["balance"]}
+    state["balance"] -= amount
+    if "history" not in state:
+        state["history"] = []
+    state["history"].append({"type": "withdraw", "amount": amount})
+    save_account_state(state)
+    return {"status": "ok", "balance": state["balance"]}
 
 @router.post("/account/adjustment")
 def adjustment(amount: float = Body(...), note: str = Body("")):
-    account_state["balance"] += amount
-    account_state["history"].append({"type": "adjustment", "amount": amount, "note": note})
-    save_account_state()
-    return {"status": "ok", "balance": account_state["balance"]}
+    state = get_account_state()
+    state["balance"] += amount
+    if "history" not in state:
+        state["history"] = []
+    state["history"].append({"type": "adjustment", "amount": amount, "note": note})
+    save_account_state(state)
+    return {"status": "ok", "balance": state["balance"]}
 
 @router.post("/account/set_lot")
 def set_lot(lot: float = Body(...)):
-    account_state["lot"] = lot
-    save_account_state()
+    state = get_account_state()
+    state["lot"] = lot
+    save_account_state(state)
     return {"status": "ok", "lot": lot}
 
 @router.post("/account/set_max_open_trades")
 def set_max_open_trades(count: int = Body(...)):
-    account_state["max_open_trades"] = count
-    save_account_state()
+    state = get_account_state()
+    state["max_open_trades"] = count
+    save_account_state(state)
     return {"status": "ok", "max_open_trades": count}
 
 

@@ -1,34 +1,6 @@
 # === MT5 Error Logging ===
-import threading
-import json
-import os
-MT5_ERROR_LOG_FILE = os.path.join(os.path.dirname(__file__), "mt5_error_log.json")
-_mt5_error_lock = threading.Lock()
 
-def log_mt5_error(message):
-    entry = {"timestamp": int(time.time()), "message": message}
-    with _mt5_error_lock:
-        try:
-            if os.path.exists(MT5_ERROR_LOG_FILE):
-                with open(MT5_ERROR_LOG_FILE, "r", encoding="utf-8") as f:
-                    log = json.load(f)
-            else:
-                log = []
-        except Exception:
-            log = []
-        log.append(entry)
-        with open(MT5_ERROR_LOG_FILE, "w", encoding="utf-8") as f:
-            json.dump(log, f, ensure_ascii=False)
-
-def load_mt5_error_log():
-    with _mt5_error_lock:
-        try:
-            if os.path.exists(MT5_ERROR_LOG_FILE):
-                with open(MT5_ERROR_LOG_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
-        except Exception:
-            return []
-    return []
+from .db import log_mt5_error, get_mt5_error_log
 # === Real Trade Execution Logic ===
 def open_real_trade(symbol, lot, trade_type):
     if not mt5.initialize():

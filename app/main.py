@@ -26,27 +26,16 @@ app = FastAPI()
 # For more information on deploying FastAPI with Gunicorn, see the documentation:
 # https://fastapi.tiangolo.com/deployment/
 
-#origins = [
-#    "http://localhost:5173",         # development
-#    "https://trading.almalikiy.net", # production
-#]
-#app.add_middleware(
-#    CORSMiddleware,
-#    allow_origins=origins,
-#    allow_credentials=True  ,
-#    allow_methods=["*"],
-#    allow_headers=["*"],
-#)
 
-# definisi router dan endpoint API lainnya di sini setelah CORS middleware supaya tidak terjadi 
-# masalah header CORS. Pastikan semua endpoint API didefinisikan setelah app.add_middleware() agar 
-# CORS middleware dapat menangani permintaan dengan benar.
+# Inisialisasi DB account_state
+from .db import init_db
 from .routes import router
 app.include_router(router)
 
 # Start simulation thread on startup
 @app.on_event("startup")
 def startup_event():
+    init_db()
     start_simulation_thread()
 
 @app.get("/")
