@@ -1,11 +1,7 @@
 from fastapi import FastAPI, WebSocket
-from fastapi.middleware.cors import CORSMiddleware
-
-
-
-from .signal_ws import signal_stream
-
 from .routes import router
+from fastapi.middleware.cors import CORSMiddleware
+from .signal_ws import signal_stream
 from .sim_engine import start_simulation_thread
 app = FastAPI()
 
