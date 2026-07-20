@@ -2,10 +2,13 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from .signal_ws import signal_stream
 from .sim_engine import start_simulation_thread
+from .auto_trader import start_auto_trader_thread
 app = FastAPI()
 
 # To run the app, use the following command:
+#
 # uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+#
 # This will start the FastAPI server on port 8001 and enable hot-reloading for development.
 # You can access the API documentation at http://localhost:8001/docs
 # The WebSocket endpoint for streaming signals will be available at ws://localhost:8001/ws/signal
@@ -30,13 +33,16 @@ app = FastAPI()
 # Inisialisasi DB account_state
 from .db import init_db
 from .routes import router
+from .broker_routes import router as broker_router
 app.include_router(router)
+app.include_router(broker_router)
 
 # Start simulation thread on startup
 @app.on_event("startup")
 def startup_event():
     init_db()
     start_simulation_thread()
+    start_auto_trader_thread()
 
 @app.get("/")
 def root():

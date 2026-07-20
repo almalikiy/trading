@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { Box, Typography, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Alert, CircularProgress, Divider, Button, Snackbar, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions } from "@mui/material";
 
+const API_BASE = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+
 export default function TradeHistory() {
   const [history, setHistory] = useState([]);
   const [mt5Status, setMt5Status] = useState(null);
@@ -11,16 +13,16 @@ export default function TradeHistory() {
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
 
   useEffect(() => {
-    fetch("http://localhost:8000/trade/history")
+    fetch(`${API_BASE}/trade/history`)
       .then(res => res.json())
       .then(data => setHistory(Array.isArray(data) ? data : []));
 
-    fetch("http://localhost:8000/mt5/status")
+    fetch(`${API_BASE}/mt5/status`)
       .then(res => res.json())
       .then(data => setMt5Status(data.connected))
       .catch(() => setMt5Status(false));
 
-    fetch("http://localhost:8000/mt5/error_log")
+    fetch(`${API_BASE}/mt5/error_log`)
       .then(res => res.json())
       .then(data => setErrorLog(Array.isArray(data) ? data : []))
       .finally(() => setLoading(false));
@@ -28,12 +30,13 @@ export default function TradeHistory() {
 
   const handleForceClose = () => {
     setForceCloseLoading(true);
-    fetch("http://localhost:8000/trade/force_close", { method: "POST" })
+    fetch(`${API_BASE}/trade/force_close`, { method: "POST" })
       .then(res => res.json())
       .then(data => {
-        setSnackbar({ open: true, message: data.detail || 'Force close command sent.', severity: 'success' });
+        setSnackbar({ open: true, message: `Closed: ${data.closed.length}, Errors: ${data.errors.length}`, severity: 'success' });
+      fetch(`${API_BASE}/trade/history`)
         // Optionally refresh history after force close
-        fetch("http://localhost:8000/trade/history")
+        fetch(`${API_BASE}/trade/history`)
           .then(res => res.json())
           .then(data => setHistory(Array.isArray(data) ? data : []));
       })
@@ -113,6 +116,7 @@ export default function TradeHistory() {
                 <TableHead>
                   <TableRow>
                     <TableCell width={160}>Time</TableCell>
+                    <TableCell width={180}>Broker</TableCell>
                     <TableCell>Error Message</TableCell>
                   </TableRow>
                 </TableHead>
@@ -120,6 +124,7 @@ export default function TradeHistory() {
                   {errorLog.map((row, idx) => (
                     <TableRow key={idx}>
                       <TableCell>{new Date(row.timestamp * 1000).toLocaleString()}</TableCell>
+                      <TableCell>{row.broker_name || "-"}</TableCell>
                       <TableCell>{row.message}</TableCell>
                     </TableRow>
                   ))}
@@ -143,6 +148,8 @@ export default function TradeHistory() {
                 <TableCell>Entry Time</TableCell>
                 <TableCell>Exit Time</TableCell>
                 <TableCell>Reason</TableCell>
+                <TableCell>Broker</TableCell>
+                <TableCell>Exec</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -156,6 +163,8 @@ export default function TradeHistory() {
                   <TableCell>{row.entryTime ? new Date(row.entryTime * 1000).toLocaleString() : '-'}</TableCell>
                   <TableCell>{row.exitTime ? new Date(row.exitTime * 1000).toLocaleString() : '-'}</TableCell>
                   <TableCell>{row.reason || '-'}</TableCell>
+                  <TableCell>{row.broker_name || '-'}</TableCell>
+                  <TableCell>{row.execution_mode || '-'}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

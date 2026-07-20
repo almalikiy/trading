@@ -1,8 +1,10 @@
 import MetaTrader5 as mt5
 from fastapi import WebSocket
-from .logic import analyze_symbol
+from .logic import get_signal_snapshot
 import asyncio
 from . import config
+from .db import get_account_state, resolve_feed_broker
+from .terminal_adapters import ensure_terminal_running
 
 SYMBOL = "XAUUSD"  # default, bisa diubah via API nanti
 
@@ -10,17 +12,17 @@ async def signal_stream(websocket: WebSocket):
     await websocket.accept()
     interval = getattr(config, 'interval_seconds', 1)
     mode = getattr(config, 'mode', 'real')
-    if not mt5.initialize():
-        try:
-            await websocket.send_json({"error": "MT5 not connected"})
-        except Exception:
-            pass
-        await websocket.close()
-        return
+    state = get_account_state()
+    feed_broker = resolve_feed_broker(state=state, require_terminal_path=True)
+    if not feed_broker:
+        feed_broker = resolve_feed_broker(state=state, require_terminal_path=False)
+    terminal_path = feed_broker.get("terminal_path") if feed_broker else None
+    if terminal_path:
+        ensure_terminal_running(terminal_path)
     try:
         while True:
             try:
-                result = analyze_symbol(SYMBOL, mode=mode)
+                result = get_signal_snapshot(SYMBOL, mode=mode, terminal_path=terminal_path)
                 await websocket.send_json(result)
             except Exception as e:
                 try:
@@ -35,4 +37,3 @@ async def signal_stream(websocket: WebSocket):
             await websocket.close()
         except Exception:
             pass
-        mt5.shutdown()

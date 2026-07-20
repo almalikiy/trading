@@ -102,6 +102,8 @@ import pandas as pd
 import numpy as np
 # time: Modul standar Python untuk waktu (jarang dipakai di script ini)
 import time
+import threading
+from typing import Any
 # ta: Library technical analysis (indikator trading)
 from ta.volatility import BollingerBands
 from ta.momentum import RSIIndicator, StochasticOscillator
@@ -111,7 +113,7 @@ from ta.trend import MACD, SMAIndicator
 # Fungsi utama: Mengambil data OHLCV dari MetaTrader 5 API
 # OHLCV = Open, High, Low, Close, Volume (data candlestick)
 ###########################################################
-def fetch_ohlcv(symbol, timeframe, bars=100):
+def fetch_ohlcv(symbol, timeframe, bars=100, terminal_path=None):
     # Mapping kode timeframe string ke konstanta MT5
     tf_map = {
         'M1': mt5.TIMEFRAME_M1,   # 1 menit
@@ -120,26 +122,36 @@ def fetch_ohlcv(symbol, timeframe, bars=100):
         'M30': mt5.TIMEFRAME_M30  # 30 menit
     }
     # Inisialisasi koneksi ke MetaTrader 5
-    if not mt5.initialize():
-        raise RuntimeError("MT5 not connected")
-    # Ambil 60 bar ekstra dari permintaan
-    bars_fetch = bars + 60
-    rates = mt5.copy_rates_from_pos(symbol, tf_map[timeframe], 0, bars_fetch)
-    if rates is None or len(rates) == 0:
-        raise RuntimeError(f"No data for {symbol} {timeframe}")
-    df = pd.DataFrame(rates)
-    if df.empty:
-        raise RuntimeError(f"No data for {symbol} {timeframe}")
-    df = df[['time', 'open', 'high', 'low', 'close', 'tick_volume']]
-    df = df.astype({
-        'open': float,
-        'high': float,
-        'low': float,
-        'close': float,
-        'tick_volume': int
-    }, errors='ignore')
-    # Kembalikan semua bar hasil fetch, frontend yang memilih bar mana yang ditampilkan
-    return df
+    initialized = False
+    try:
+        if terminal_path:
+            initialized = mt5.initialize(path=terminal_path)
+        else:
+            initialized = mt5.initialize()
+        if not initialized:
+            raise RuntimeError("MT5 not connected")
+
+        # Ambil 60 bar ekstra dari permintaan
+        bars_fetch = bars + 60
+        rates = mt5.copy_rates_from_pos(symbol, tf_map[timeframe], 0, bars_fetch)
+        if rates is None or len(rates) == 0:
+            raise RuntimeError(f"No data for {symbol} {timeframe}")
+        df = pd.DataFrame(rates)
+        if df.empty:
+            raise RuntimeError(f"No data for {symbol} {timeframe}")
+        df = df[['time', 'open', 'high', 'low', 'close', 'tick_volume']]
+        df = df.astype({
+            'open': float,
+            'high': float,
+            'low': float,
+            'close': float,
+            'tick_volume': int
+        }, errors='ignore')
+        # Kembalikan semua bar hasil fetch, frontend yang memilih bar mana yang ditampilkan
+        return df
+    finally:
+        if initialized:
+            mt5.shutdown()
 
 ###########################################################
 # Fungsi: Hitung indikator teknikal dari data OHLCV
@@ -196,13 +208,13 @@ def generate_signal(indicators, mode='real'):
 # Fungsi utama: Analisa multi-timeframe dan simulasi trading
 # Memanggil fetch_ohlcv dan calculate_indicators untuk tiap TF
 ###########################################################
-def analyze_symbol(symbol, bars=60, timeframes=None, mode='real'):
+def analyze_symbol(symbol, bars=60, timeframes=None, mode='real', terminal_path=None):
     timeframes = ['M1', 'M5', 'M15', 'M30']
     indicators = {}
     errors = {}
     for tf in timeframes:
         try:
-            df = fetch_ohlcv(symbol, tf)
+            df = fetch_ohlcv(symbol, tf, terminal_path=terminal_path)
             indicators[tf] = calculate_indicators(df)
         except Exception as e:
             errors[tf] = str(e)
@@ -242,3 +254,97 @@ class SignalSimulator:
         return {'balance': self.balance, 'open_trade': self.open_trade, 'pnl': self.pnl}
 
 simulator = SignalSimulator()
+
+
+_signal_cache: dict[str, dict[str, Any]] = {}
+_ohlcv_cache: dict[str, dict[str, Any]] = {}
+_refreshing_signal: set[str] = set()
+_refreshing_ohlcv: set[str] = set()
+_cache_lock = threading.Lock()
+
+
+def _cache_key(*parts):
+    return "|".join("" if part is None else str(part) for part in parts)
+
+
+def _start_background_refresh(cache_kind, key, worker):
+    with _cache_lock:
+        if cache_kind == "signal":
+            if key in _refreshing_signal:
+                return False
+            _refreshing_signal.add(key)
+        else:
+            if key in _refreshing_ohlcv:
+                return False
+            _refreshing_ohlcv.add(key)
+
+    def runner():
+        try:
+            worker()
+        finally:
+            with _cache_lock:
+                if cache_kind == "signal":
+                    _refreshing_signal.discard(key)
+                else:
+                    _refreshing_ohlcv.discard(key)
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    return True
+
+
+def get_signal_snapshot(symbol, mode='real', terminal_path=None):
+    key = _cache_key(symbol, mode, terminal_path)
+
+    def worker():
+        result = analyze_symbol(symbol, mode=mode, terminal_path=terminal_path)
+        with _cache_lock:
+            _signal_cache[key] = {
+                "data": result,
+                "updated_at": time.time(),
+            }
+
+    _start_background_refresh("signal", key, worker)
+
+    with _cache_lock:
+        snapshot = _signal_cache.get(key)
+
+    if snapshot and snapshot.get("data"):
+        payload = dict(snapshot["data"])
+        payload["cached"] = True
+        payload["cached_at"] = snapshot.get("updated_at")
+        return payload
+
+    return {
+        "signal": "wait",
+        "indicators": {},
+        "simulator": {},
+        "cached": False,
+        "refreshing": True,
+    }
+
+
+def get_ohlcv_snapshot(symbol, timeframe, bars=100, terminal_path=None):
+    key = _cache_key(symbol, timeframe, bars, terminal_path)
+
+    def worker():
+        df = fetch_ohlcv(symbol, timeframe, bars, terminal_path=terminal_path)
+        df = df.copy()
+        df["time"] = df["time"] - 3 * 3600
+        df = df[["time", "open", "high", "low", "close", "tick_volume"]]
+        result = df.to_dict(orient="records")
+        with _cache_lock:
+            _ohlcv_cache[key] = {
+                "data": result,
+                "updated_at": time.time(),
+            }
+
+    _start_background_refresh("ohlcv", key, worker)
+
+    with _cache_lock:
+        snapshot = _ohlcv_cache.get(key)
+
+    if snapshot and snapshot.get("data"):
+        return snapshot["data"]
+
+    return []

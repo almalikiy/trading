@@ -1,501 +1,347 @@
-
-
-
-
-// Saat autoTPSL dinonaktifkan, set customTP/customSL ke nilai analytic terakhir
-// (letakkan useEffect ini di dalam komponen App, bukan di luar file)
-
-
-
-// Helper: Calculate ATR (Average True Range) for last N bars
-function calcATR(ohlcv, period = 14) {
-  if (!ohlcv || ohlcv.length < period + 1) return null;
-  let trs = [];
-  for (let i = ohlcv.length - period; i < ohlcv.length; ++i) {
-    const high = ohlcv[i].high;
-    const low = ohlcv[i].low;
-    const prevClose = ohlcv[i - 1].close;
-    trs.push(Math.max(
-      high - low,
-      Math.abs(high - prevClose),
-      Math.abs(low - prevClose)
-    ));
-  }
-  return trs.reduce((a, b) => a + b, 0) / trs.length;
-}
-
-// Helper: Find nearest support/resistance (simple: min/max of last N bars)
-function findSupportResistance(ohlcv, period = 20) {
-  if (!ohlcv || ohlcv.length < period) return { support: null, resistance: null };
-  let lows = ohlcv.slice(-period).map(b => b.low);
-  let highs = ohlcv.slice(-period).map(b => b.high);
-  return {
-    support: Math.min(...lows),
-    resistance: Math.max(...highs)
-  };
-}
-
-import React, { useEffect, useState, useRef } from "react";
-import { v4 as uuidv4 } from 'uuid';
-import { useNavigate } from "react-router-dom";
+import React, { useEffect, useState } from "react";
 import CandlestickChart from "./CandlestickChart";
 import LineChart from "./LineChart";
-import { Box, Typography, Paper, Grid, Button, TextField, Alert, ButtonGroup, Snackbar, Alert as MuiAlert, Select, MenuItem, InputLabel, FormControl, Switch, FormControlLabel, CssBaseline, Checkbox } from "@mui/material";
-import { ThemeProvider, createTheme } from '@mui/material/styles';
-import ReconnectingWebSocket from "reconnecting-websocket";
+import {
+  Box,
+  Typography,
+  Paper,
+  Grid,
+  Button,
+  TextField,
+  Alert,
+  ButtonGroup,
+  Snackbar,
+  Alert as MuiAlert,
+  Select,
+  MenuItem,
+  InputLabel,
+  FormControl,
+  Switch,
+  FormControlLabel,
+  CssBaseline,
+  Checkbox,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  CircularProgress,
+} from "@mui/material";
+import { ThemeProvider, createTheme } from "@mui/material/styles";
 
-// Helper: check if user can still late follow the signal
-function canLateFollow(signal, lastSignalTime, ohlcv, maxDelaySec = 60) {
-  if (!signal || signal === 'wait' || !lastSignalTime || !ohlcv || ohlcv.length === 0) return false;
-  const nowEpoch = Math.floor(Date.now() / 1000);
-  const delay = nowEpoch - lastSignalTime;
-  if (delay > maxDelaySec) return false;
-  // Check if price is still close to the open price when signal appeared
-  // (can be improved according to strategy)
-  return true;
-}
-
-// Preset strategi (boleh di luar komponen)
-const strategyPresets = [
-  {
-    label: 'Scalp Cepat',
-    value: 'scalp_cepat',
-    params: { rsi: 14, rsiLevel: 20, macdFast: 12, macdSlow: 26, macdSignal: 9, stochK: 5, stochD: 3, stochS: 3, bbPeriod: 20, bbStd: 2, maPeriod: 20 }
-  },
-  {
-    label: 'Scalp Konsolidasi (Range)',
-    value: 'scalp_range',
-    params: { rsi: 14, rsiLevel: 30, macdFast: 12, macdSlow: 26, macdSignal: 9, stochK: 5, stochD: 3, stochS: 3, bbPeriod: 20, bbStd: 2, maPeriod: 20 }
-  },
-  {
-    label: 'Scalp Maksimal',
-    value: 'scalp_maksimal',
-    params: { rsi: 7, rsiLevel: 20, macdFast: 5, macdSlow: 13, macdSignal: 9, stochK: 3, stochD: 1, stochS: 1, bbPeriod: 20, bbStd: 2, maPeriod: 20 }
-  },
-  {
-    label: 'Scalp Long (Momentum Panjang)',
-    value: 'scalp_long',
-    params: { rsi: 14, rsiLevel: 40, macdFast: 12, macdSlow: 26, macdSignal: 9, stochK: 5, stochD: 3, stochS: 3, bbPeriod: 20, bbStd: 2, maPeriod: 50 }
-  }
-  // Tambah preset lain sesuai kebutuhan
-];
-
-
-// === Backend URL Config ===
 const BACKEND_URLS = {
   mt5: {
     http: import.meta.env.VITE_BACKEND_URL,
-    ws: import.meta.env.VITE_BACKEND_WS_URL
+    ws: import.meta.env.VITE_BACKEND_WS_URL,
   },
-  sim: { // not yet impelemented, fallback ke mt5
+  sim: {
     http: "http://localhost:8002",
-    ws: "ws://localhost:8002/ws/signal"
-  }
+    ws: "ws://localhost:8002/ws/signal",
+  },
 };
 
-function getBackendUrl(engine, type = 'http') {
+const BROKERS_CACHE_KEY = "dashboard_brokers_cache_v1";
+const DEFAULT_BROKER_CACHE_KEY = "dashboard_default_broker_cache_v1";
+
+function getBackendUrl(engine, type = "http") {
   return BACKEND_URLS[engine]?.[type] || BACKEND_URLS.mt5[type];
 }
 
-const WS_URL = getBackendUrl('mt5', 'ws');
+function toNullableNumber(value) {
+  if (value === "" || value === null || value === undefined) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function calcTradeFloatingPnl(trade, lastPrice) {
+  if (!trade || lastPrice === null || lastPrice === undefined) return 0;
+  const entry = Number(trade.entry);
+  const lot = Number(trade.lot || 0);
+  if (!Number.isFinite(entry) || !Number.isFinite(lot)) return 0;
+  const scale = 100 * lot;
+  const t = String(trade.type || "").toUpperCase();
+  if (t === "BUY") return (lastPrice - entry) * scale;
+  if (t === "SELL") return (entry - lastPrice) * scale;
+  return 0;
+}
+
+function canLateFollow({ signal, signalTime, signalPrice, currentPrice, maxDelaySec = 60, maxPriceDrift = 0.5 }) {
+  if (!signal || signal === "wait" || !signalTime || currentPrice === null || currentPrice === undefined) return false;
+  const nowEpoch = Math.floor(Date.now() / 1000);
+  const delay = nowEpoch - signalTime;
+  if (delay > maxDelaySec) return false;
+  if (signalPrice === null || signalPrice === undefined) return true;
+  return Math.abs(Number(currentPrice) - Number(signalPrice)) <= maxPriceDrift;
+}
+
+function getSignalColor(signal) {
+  if (signal === "buy") return "#1b5e20";
+  if (signal === "sell") return "#b71c1c";
+  return "#424242";
+}
 
 export default function App() {
-  // Backend account state (real balance, etc)
-  const [accountState, setAccountState] = useState({ balance: 0, initial_balance: 0, lot: 0.01, max_open_trades: 1, history: [] });
-  // Fetch backend account state on mount and when needed
-  useEffect(() => {
-    const fetchAccountState = () => {
-      fetch(`${getBackendUrl('mt5', 'http')}/account/state`)
-        .then(res => res.json())
-        .then(data => setAccountState(data));
-    };
-    fetchAccountState();
-    // Listen for enable_real_trade changes from AccountMonitor
-    const interval = setInterval(fetchAccountState, 2000);
-    return () => clearInterval(interval);
-  }, []);
-  const navigate = useNavigate();
-  // --- Strategy Preset & Indicator Params State ---
-  const [selectedPreset, setSelectedPreset] = useState('scalp_cepat');
-  const [indicatorParams, setIndicatorParams] = useState(strategyPresets[0].params);
+  const [engine, setEngine] = useState("mt5");
+  const [tradeMode, setTradeMode] = useState("scalp");
+  const [darkMode, setDarkMode] = useState(false);
 
-  const [tradeMode, setTradeMode] = useState('scalp'); // default: scalp mode
+  const [symbol, setSymbol] = useState("XAUUSD");
+  const [tf, setTf] = useState("M1");
+  const [barCount, setBarCount] = useState(60);
+  const [chartMode, setChartMode] = useState("candlestick");
 
-  // --- Analytic TP/SL toggle state & value (from backend) ---
-  const [autoTPSL, setAutoTPSL] = useState(false);
-  const [tpValue, setTpValue] = useState(0.5);
-  const [slValue, setSlValue] = useState(null);
-
-  // Fetch TP/SL & autoTPSL from backend on mount
-  useEffect(() => {
-    fetch(`${getBackendUrl('mt5', 'http')}/account/state`)
-      .then(res => res.json())
-      .then(data => {
-        if (typeof data.auto_analytic_tpsl === 'boolean') setAutoTPSL(data.auto_analytic_tpsl);
-        if (typeof data.tp_value === 'number') setTpValue(data.tp_value);
-        if (typeof data.sl_value === 'number' || data.sl_value === null) setSlValue(data.sl_value);
-      });
-  }, []);
-
-  // Persist autoTPSL to backend whenever it changes
-  useEffect(() => {
-    fetch(`${getBackendUrl('mt5', 'http')}/account/set_auto_analytic_tpsl`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled: autoTPSL })
-    });
-  }, [autoTPSL]);
-
-  // Persist TP/SL value to backend whenever it changes
-  useEffect(() => {
-    fetch(`${getBackendUrl('mt5', 'http')}/account/set_analytic_tpsl`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tp_value: tpValue, sl_value: slValue })
-    });
-  }, [tpValue, slValue]);
-  const [enableReversalWarning, setEnableReversalWarning] = useState(true);
-  const [reversalWarning, setReversalWarning] = useState("");
-  // State for checklist and custom TP/SL value
-  const [useCustomTP, setUseCustomTP] = useState(true);
-  const [customTP, setCustomTP] = useState(1.0); // default 10 pip (1.0 XAUUSD)
-  const [customTPManuallySet, setCustomTPManuallySet] = useState(false);
-  const [useCustomSL, setUseCustomSL] = useState(false);
-  const [customSL, setCustomSL] = useState(5.0); // default SL 5 USD
-  // Auto adjust TP when tradeMode changes (scalp: 0.5, normal: 1.0), but only if not manually set
-  useEffect(() => {
-    if (!customTPManuallySet) {
-      if (tradeMode === 'scalp') {
-        setCustomTP(0.5); // 5 pip
-      } else {
-        setCustomTP(1.0); // 10 pip
-      }
-    }
-  }, [tradeMode, customTPManuallySet]);
-  const [lastSignalTime, setLastSignalTime] = useState(null);
-  const [lateFollowMsg, setLateFollowMsg] = useState("");
-  const [signalError, setSignalError] = useState(null);
-  const [chartMode, setChartMode] = useState('candlestick');
   const [signal, setSignal] = useState("wait");
   const [prevSignal, setPrevSignal] = useState("wait");
   const [indicators, setIndicators] = useState({});
-  const [prevIndicators, setPrevIndicators] = useState({});
-  const [sim, setSim] = useState({ balance: 1000, open_trade: false, pnl: 0 });
+  const [signalError, setSignalError] = useState(null);
+
   const [ohlcv, setOhlcv] = useState([]);
-  const [ohlcvWarning, setOhlcvWarning] = useState("");
   const [ohlcvError, setOhlcvError] = useState(false);
-  const [symbol, setSymbol] = useState("XAUUSD");
-  const [tf, setTf] = useState("M1");
+  const [ohlcvWarning, setOhlcvWarning] = useState("");
+
+  const [accountState, setAccountState] = useState({
+    balance: 0,
+    lot: 0.01,
+    auto_trade_enabled: false,
+    keep_terminal_alive: true,
+    auto_analytic_tpsl: false,
+    tp_value: 0.5,
+    sl_value: null,
+  });
+  const [accountSettingsLoaded, setAccountSettingsLoaded] = useState(false);
+  const [autoTradeEnabled, setAutoTradeEnabled] = useState(false);
+  const [keepTerminalAlive, setKeepTerminalAlive] = useState(true);
+
+  const [brokers, setBrokers] = useState([]);
+  const [defaultBroker, setDefaultBroker] = useState(null);
+  const [selectedBrokerId, setSelectedBrokerId] = useState("");
+  const [selectedOrderMethod, setSelectedOrderMethod] = useState("mouse");
+  const [manualLot, setManualLot] = useState(0.01);
+  const [manualTradeLoading, setManualTradeLoading] = useState(false);
+  const [brokerOrderStatus, setBrokerOrderStatus] = useState(null);
+
+  const [lastSignalTime, setLastSignalTime] = useState(null);
+  const [lastSignalPrice, setLastSignalPrice] = useState(null);
+  const [lastActionableSignal, setLastActionableSignal] = useState("wait");
+  const [lateFollowMsg, setLateFollowMsg] = useState("");
+
+  const [openTradeCount, setOpenTradeCount] = useState(0);
+  const [openPositions, setOpenPositions] = useState([]);
+  const [positionsLoading, setPositionsLoading] = useState(true);
+  const [tpSlDrafts, setTpSlDrafts] = useState({});
+  const [tradeActionLoading, setTradeActionLoading] = useState({});
+
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMsg, setSnackbarMsg] = useState("");
-  const [barCount, setBarCount] = useState(60); // default: 60 bars
-  const [darkMode, setDarkMode] = useState(false);
-  // const [tradeMode, setTradeMode] = useState('scalp'); // default: scalp mode (duplicate, removed)
-  const [engine, setEngine] = useState('mt5'); // mt5/sim
 
-  // Automatic simulation: user always follows signal, lot 0.01
-  // user_id: use UUID in localStorage if not logged in
-  let USER_ID = localStorage.getItem('user_id');
-  if (!USER_ID) {
-    USER_ID = uuidv4();
-    localStorage.setItem('user_id', USER_ID);
-  }
-  const [simu, setSimu] = useState({
-    balance: 1000,
-    openTrade: false,
-    entryPrice: null,
-    entryTime: null,
-    direction: null, // 'buy' atau 'sell'
-    pnl: 0,
-    lastSignal: 'wait',
-    tradeHistory: []
-  });
-
-  // Load open trade from backend user profile on page load (use engine utama)
-  useEffect(() => {
-    fetch(`${getBackendUrl(engine, 'http')}/user/open_trade?user_id=${USER_ID}`)
-      .then(res => {
-        if (!res.ok) throw new Error('Failed to fetch open trade');
-        return res.json();
-      })
-      .then(data => {
-        // Defensive: ensure tradeHistory is always an array
-        if (!data || typeof data !== 'object') data = {};
-        if (!Array.isArray(data.tradeHistory)) data.tradeHistory = [];
-        // Defensive: fill missing fields with defaults
-        setSimu({
-          balance: typeof data.balance === 'number' ? data.balance : 1000,
-          openTrade: !!data.openTrade,
-          entryPrice: data.entryPrice ?? null,
-          entryTime: data.entryTime ?? null,
-          direction: data.direction ?? null,
-          pnl: typeof data.pnl === 'number' ? data.pnl : 0,
-          lastSignal: data.lastSignal ?? 'wait',
-          tradeHistory: data.tradeHistory
-        });
-      })
-      .catch(() => {
-        // On error, reset to default state
-        setSimu({
-          balance: 1000,
-          openTrade: false,
-          entryPrice: null,
-          entryTime: null,
-          direction: null,
-          pnl: 0,
-          lastSignal: 'wait',
-          tradeHistory: []
-        });
-      });
-  }, [engine]);
-
-  // Run simulation every time signal or price changes, and auto-close trade if TP hit
-  useEffect(() => {
-    if (!ohlcv || ohlcv.length < 20) return;
-    const lastBar = ohlcv[ohlcv.length - 1];
-    const prevBar = ohlcv[ohlcv.length - 2];
-
-    // --- Analytic TP/SL calculation ---
-    let analyticTP = customTP;
-    let analyticSL = customSL;
-    const direction = simu.direction;
-    if (autoTPSL) {
-      // ATR-based TP/SL
-      const atr = calcATR(ohlcv, 14) || 1;
-      // Support/resistance
-      const { support, resistance } = findSupportResistance(ohlcv, 20);
-      // Volatility (stddev of close)
-      const closes = ohlcv.slice(-20).map(b => b.close);
-      const mean = closes.reduce((a, b) => a + b, 0) / closes.length;
-      const std = Math.sqrt(closes.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / closes.length);
-      // TP: min(ATR*2, jarak ke resistance/support, 2*stddev)
-      if (direction === 'buy') {
-        const distRes = resistance ? resistance - lastBar.close : atr * 2;
-        analyticTP = Math.max(0.1, Math.min(atr * 2, distRes, std * 2));
-        const distSup = lastBar.close - support;
-        analyticSL = Math.max(0.1, Math.min(atr, distSup, std));
-      } else if (direction === 'sell') {
-        const distSup = lastBar.close - support;
-        analyticTP = Math.max(0.1, Math.min(atr * 2, distSup, std * 2));
-        const distRes = resistance ? resistance - lastBar.close : atr * 2;
-        analyticSL = Math.max(0.1, Math.min(atr, Math.abs(distRes), std));
-      }
-    }
-
-    setSimu(prev => {
-      let { balance, openTrade, entryPrice, entryTime, direction, pnl, lastSignal, tradeHistory } = prev;
-      let newTradeHistory = [...tradeHistory];
-      let tpHit = false;
-      let slHit = false;
-      let reversalHit = false;
-      // Only process if signal changes (and not 'wait')
-      if (signal !== lastSignal && signal !== 'wait') {
-        if (signal === 'buy') {
-          // Close sell position if any
-          if (openTrade && direction === 'sell') {
-            const closePrice = lastBar.open;
-            const profit = (entryPrice - closePrice) * 100 * 0.01;
-            balance += profit;
-            newTradeHistory.push({
-              type: 'SELL', entry: entryPrice, exit: closePrice, profit, entryTime, exitTime: lastBar.time,
-              tpValue: prev.tpValue, slValue: prev.slValue
-            });
-            openTrade = false; entryPrice = null; entryTime = null; direction = null; pnl = 0;
-          }
-          // Open buy position if not already open
-          if (!openTrade) {
-            openTrade = true; entryPrice = lastBar.open; entryTime = lastBar.time; direction = 'buy'; pnl = 0;
-            // Capture TP/SL at open
-            prev.tpValue = autoTPSL ? analyticTP : (useCustomTP ? customTP : null);
-            prev.slValue = autoTPSL ? analyticSL : (useCustomSL ? customSL : null);
-          }
-        } else if (signal === 'sell') {
-          // Close buy position if any
-          if (openTrade && direction === 'buy') {
-            const closePrice = lastBar.open;
-            const profit = (closePrice - entryPrice) * 100 * 0.01;
-            balance += profit;
-            newTradeHistory.push({
-              type: 'BUY', entry: entryPrice, exit: closePrice, profit, entryTime, exitTime: lastBar.time,
-              tpValue: prev.tpValue, slValue: prev.slValue
-            });
-            openTrade = false; entryPrice = null; entryTime = null; direction = null; pnl = 0;
-          }
-          // Open sell position if not already open
-          if (!openTrade) {
-            openTrade = true; entryPrice = lastBar.open; entryTime = lastBar.time; direction = 'sell'; pnl = 0;
-            // Capture TP/SL at open
-            prev.tpValue = autoTPSL ? analyticTP : (useCustomTP ? customTP : null);
-            prev.slValue = autoTPSL ? analyticSL : (useCustomSL ? customSL : null);
-          }
-        }
-      }
-      // Auto-close trade if TP hit (when TP is enabled)
-      if (openTrade && entryPrice != null && prev.tpValue && prev.tpValue > 0) {
-        let tpPrice = null;
-        if (direction === 'buy') tpPrice = entryPrice + prev.tpValue;
-        else if (direction === 'sell') tpPrice = entryPrice - prev.tpValue;
-        if ((direction === 'buy' && lastBar.close >= tpPrice) || (direction === 'sell' && lastBar.close <= tpPrice)) {
-          // Close trade at TP
-          const closePrice = tpPrice;
-          const profit = direction === 'buy'
-            ? (closePrice - entryPrice) * 100 * 0.01
-            : (entryPrice - closePrice) * 100 * 0.01;
-          balance += profit;
-          newTradeHistory.push({
-            type: direction === 'buy' ? 'BUY' : 'SELL',
-            entry: entryPrice,
-            exit: closePrice,
-            profit,
-            entryTime,
-            exitTime: lastBar.time,
-            tpValue: prev.tpValue, slValue: prev.slValue,
-            analytic: autoTPSL ? true : undefined
-          });
-          openTrade = false; entryPrice = null; entryTime = null; direction = null; pnl = 0;
-          tpHit = true;
-        }
-      }
-      // Auto-close trade if SL hit (when SL is enabled)
-      if (openTrade && entryPrice != null && prev.slValue && prev.slValue > 0) {
-        let slPrice = null;
-        if (direction === 'buy') slPrice = entryPrice - prev.slValue;
-        else if (direction === 'sell') slPrice = entryPrice + prev.slValue;
-        if ((direction === 'buy' && lastBar.close <= slPrice) || (direction === 'sell' && lastBar.close >= slPrice)) {
-          // Close trade at SL
-          const closePrice = slPrice;
-          const profit = direction === 'buy'
-            ? (closePrice - entryPrice) * 100 * 0.01
-            : (entryPrice - closePrice) * 100 * 0.01;
-          balance += profit;
-          newTradeHistory.push({
-            type: direction === 'buy' ? 'BUY' : 'SELL',
-            entry: entryPrice,
-            exit: closePrice,
-            profit,
-            entryTime,
-            exitTime: lastBar.time,
-            tpValue: prev.tpValue, slValue: prev.slValue,
-            analytic: autoTPSL ? true : undefined
-          });
-          openTrade = false; entryPrice = null; entryTime = null; direction = null; pnl = 0;
-          slHit = true;
-        }
-      }
-      // Auto-close trade if reversal warning appears and enabled
-      if (openTrade && entryPrice != null && enableReversalWarning && reversalWarning) {
-        // Close trade at lastBar.close
-        const closePrice = lastBar.close;
-        const profit = direction === 'buy'
-          ? (closePrice - entryPrice) * 100 * 0.01
-          : (entryPrice - closePrice) * 100 * 0.01;
-        balance += profit;
-        newTradeHistory.push({
-          type: direction === 'buy' ? 'BUY' : 'SELL',
-          entry: entryPrice,
-          exit: closePrice,
-          profit,
-          entryTime,
-          exitTime: lastBar.time,
-          reason: 'Reversal Warning'
-        });
-        openTrade = false; entryPrice = null; entryTime = null; direction = null; pnl = 0;
-        reversalHit = true;
-      }
-      // Update floating PnL if there is an open position
-      if (openTrade && entryPrice != null) {
-        if (direction === 'buy') {
-          pnl = (lastBar.close - entryPrice) * 100 * 0.01;
-        } else if (direction === 'sell') {
-          pnl = (entryPrice - lastBar.close) * 100 * 0.01;
-        }
-      } else {
-        pnl = 0;
-      }
-      // Save to backend if openTrade, remove if not (use engine utama)
-      if (openTrade && entryPrice != null) {
-        fetch(`${getBackendUrl(engine, 'http')}/user/open_trade?user_id=${USER_ID}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            balance,
-            openTrade,
-            entryPrice,
-            entryTime,
-            direction,
-            pnl,
-            lastSignal: signal,
-            tradeHistory: newTradeHistory
-          })
-        });
-      } else {
-        fetch(`${getBackendUrl(engine, 'http')}/user/open_trade?user_id=${USER_ID}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ openTrade: false })
-        });
-      }
-      return {
-        balance,
-        openTrade,
-        entryPrice,
-        entryTime,
-        direction,
-        pnl,
-        lastSignal: signal,
-        tradeHistory: newTradeHistory
-      };
-    });
-  }, [signal, ohlcv, useCustomTP, customTP, useCustomSL, customSL, enableReversalWarning, reversalWarning]);
+  const lastPrice = ohlcv && ohlcv.length > 0 ? Number(ohlcv[ohlcv.length - 1].close) : null;
+  const totalFloatingPnl = openPositions.reduce((sum, trade) => sum + calcTradeFloatingPnl(trade, lastPrice), 0);
 
   const theme = createTheme({
     palette: {
-      mode: darkMode ? 'dark' : 'light',
-      primary: { main: '#1976d2' },
-      secondary: { main: '#43e97b' },
+      mode: darkMode ? "dark" : "light",
+      primary: { main: "#1976d2" },
+      secondary: { main: "#43e97b" },
     },
     typography: {
       fontSize: 13,
-      h4: { fontSize: '1.3rem', '@media (max-width:600px)': { fontSize: '1.1rem' } },
-      h6: { fontSize: '1.1rem', '@media (max-width:600px)': { fontSize: '1rem' } },
-      body2: { fontSize: '0.95rem', '@media (max-width:600px)': { fontSize: '0.85rem' } },
-    },
-    components: {
-      MuiPaper: {
-        styleOverrides: {
-          root: {
-            '@media (max-width:600px)': {
-              padding: '8px !important',
-              marginBottom: '10px',
-            },
-          },
-        },
-      },
+      h4: { fontSize: "1.3rem", "@media (max-width:600px)": { fontSize: "1.1rem" } },
+      h6: { fontSize: "1.1rem", "@media (max-width:600px)": { fontSize: "1rem" } },
+      body2: { fontSize: "0.95rem", "@media (max-width:600px)": { fontSize: "0.85rem" } },
     },
   });
 
+  const refreshAccountState = () => {
+    fetch(`${getBackendUrl("mt5", "http")}/account/state`)
+      .then((res) => res.json())
+      .then((data) => {
+        setAccountState(data);
+        setAutoTradeEnabled(!!data.auto_trade_enabled);
+        setKeepTerminalAlive(data.keep_terminal_alive !== false);
+        setManualLot(Math.max(0.01, Number(data.lot || 0.01)));
+        setAccountSettingsLoaded(true);
+      })
+      .catch(() => {});
+  };
+
+  const refreshBrokers = () => {
+    fetch(`${getBackendUrl("mt5", "http")}/brokers?include_inactive=true`)
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load brokers");
+        return res.json();
+      })
+      .then((data) => {
+        const items = Array.isArray(data) ? data : [];
+        if (items.length > 0) {
+          localStorage.setItem(BROKERS_CACHE_KEY, JSON.stringify(items));
+        }
+        setBrokers((prev) => {
+          if (items.length > 0) return items;
+          return prev;
+        });
+      })
+      .catch(() => {
+        try {
+          const raw = localStorage.getItem(BROKERS_CACHE_KEY);
+          const cached = raw ? JSON.parse(raw) : [];
+          if (Array.isArray(cached) && cached.length > 0) {
+            setBrokers((prev) => (prev.length > 0 ? prev : cached));
+          }
+        } catch {
+          // Ignore cache parse failures.
+        }
+      });
+
+    fetch(`${getBackendUrl("mt5", "http")}/brokers/default`)
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load default broker");
+        return res.json();
+      })
+      .then((data) => {
+        if (data && data.id) {
+          localStorage.setItem(DEFAULT_BROKER_CACHE_KEY, JSON.stringify(data));
+          setDefaultBroker(data);
+          setSelectedBrokerId(String(data.id));
+          if (data.execution_mode) setSelectedOrderMethod(data.execution_mode);
+          setBrokers((prev) => {
+            const exists = prev.some((b) => String(b.id) === String(data.id));
+            return exists ? prev : [data, ...prev];
+          });
+        }
+      })
+      .catch(() => {
+        try {
+          const raw = localStorage.getItem(DEFAULT_BROKER_CACHE_KEY);
+          const cached = raw ? JSON.parse(raw) : null;
+          if (cached && cached.id) {
+            setDefaultBroker(cached);
+            setSelectedBrokerId((prev) => prev || String(cached.id));
+            if (cached.execution_mode) setSelectedOrderMethod((prev) => prev || cached.execution_mode);
+            setBrokers((prev) => {
+              const exists = prev.some((b) => String(b.id) === String(cached.id));
+              return exists ? prev : [cached, ...prev];
+            });
+          }
+        } catch {
+          // Ignore cache parse failures.
+        }
+      });
+  };
+
   useEffect(() => {
-    // Choose engine base URL
-    const baseUrl = getBackendUrl(engine, 'http');
+    try {
+      const rawBrokers = localStorage.getItem(BROKERS_CACHE_KEY);
+      const cachedBrokers = rawBrokers ? JSON.parse(rawBrokers) : [];
+      if (Array.isArray(cachedBrokers) && cachedBrokers.length > 0) {
+        setBrokers((prev) => (prev.length > 0 ? prev : cachedBrokers));
+      }
+
+      const rawDefault = localStorage.getItem(DEFAULT_BROKER_CACHE_KEY);
+      const cachedDefault = rawDefault ? JSON.parse(rawDefault) : null;
+      if (cachedDefault && cachedDefault.id) {
+        setDefaultBroker((prev) => prev || cachedDefault);
+        setSelectedBrokerId((prev) => prev || String(cachedDefault.id));
+        if (cachedDefault.execution_mode) {
+          setSelectedOrderMethod((prev) => prev || cachedDefault.execution_mode);
+        }
+      }
+    } catch {
+      // Ignore cache parse failures.
+    }
+  }, []);
+
+  const refreshOpenCount = () => {
+    fetch(`${getBackendUrl("mt5", "http")}/trade/open_count`)
+      .then((res) => res.json())
+      .then((data) => setOpenTradeCount(Number(data.open_count || 0)))
+      .catch(() => setOpenTradeCount(0));
+  };
+
+  const refreshOpenPositions = () => {
+    fetch(`${getBackendUrl("mt5", "http")}/trade/open_positions`)
+      .then((res) => res.json())
+      .then((rows) => {
+        const items = Array.isArray(rows) ? rows : [];
+        setOpenPositions(items);
+        setTpSlDrafts((prev) => {
+          const next = { ...prev };
+          const activeIds = new Set(items.map((t) => String(t.trade_id)));
+          items.forEach((t) => {
+            const id = String(t.trade_id);
+            if (!next[id]) {
+              next[id] = {
+                tpValue: t.tpValue ?? "",
+                slValue: t.slValue ?? "",
+              };
+            }
+          });
+          Object.keys(next).forEach((id) => {
+            if (!activeIds.has(id)) delete next[id];
+          });
+          return next;
+        });
+      })
+      .catch(() => setOpenPositions([]))
+      .finally(() => setPositionsLoading(false));
+  };
+
+  useEffect(() => {
+    refreshAccountState();
+    refreshOpenCount();
+    refreshOpenPositions();
+    refreshBrokers();
+    const timer = setInterval(() => {
+      refreshAccountState();
+      refreshOpenCount();
+      refreshOpenPositions();
+    }, 2000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      refreshBrokers();
+    }, 10000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!accountSettingsLoaded) return;
+    fetch(`${getBackendUrl("mt5", "http")}/account/set_auto_trade_enabled`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(autoTradeEnabled),
+    });
+  }, [autoTradeEnabled, accountSettingsLoaded]);
+
+  useEffect(() => {
+    if (!accountSettingsLoaded) return;
+    fetch(`${getBackendUrl("mt5", "http")}/account/set_keep_terminal_alive`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(keepTerminalAlive),
+    });
+  }, [keepTerminalAlive, accountSettingsLoaded]);
+
+  useEffect(() => {
+    const baseUrl = getBackendUrl(engine, "http");
     const fetchSignal = () => {
       fetch(`${baseUrl}/signal?symbol=${symbol}&mode=${tradeMode}`)
-        .then(res => res.json())
-        .then(data => {
+        .then((res) => res.json())
+        .then((data) => {
           if (data.error) {
-            setSignalError(data.error + (data.details ? ': ' + JSON.stringify(data.details) : ''));
-            setSignal('wait');
+            setSignalError(data.error + (data.details ? `: ${JSON.stringify(data.details)}` : ""));
+            setSignal("wait");
             setIndicators({});
-            setSim({ balance: 1000, open_trade: false, pnl: 0 });
             return;
-          } else {
-            setSignalError(null);
           }
+          setSignalError(null);
           setPrevSignal(signal);
-          setSignal(data.signal);
-          setPrevIndicators(indicators);
-          setIndicators(data.indicators);
-          setSim(data.simulator);
-        });
+          setSignal(data.signal || "wait");
+          setIndicators(data.indicators || {});
+        })
+        .catch(() => {});
     };
     fetchSignal();
     const timer = setInterval(fetchSignal, 1000);
@@ -503,21 +349,7 @@ export default function App() {
   }, [symbol, tradeMode, engine]);
 
   useEffect(() => {
-    if (prevSignal && signal && prevSignal !== signal) {
-          setSnackbarMsg(`Signal changed from ${prevSignal.toUpperCase()} to ${signal.toUpperCase()}`);
-      setSnackbarOpen(true);
-    }
-    if (signal && signal !== 'wait') {
-      setLastSignalTime(Math.floor(Date.now() / 1000));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signal]);
-
-  // Auto refresh OHLCV tiap detik
-  useEffect(() => {
-    const baseUrl = getBackendUrl(engine, 'http');
-    let timer;
-    let stopped = false;
+    const baseUrl = getBackendUrl(engine, "http");
     const fetchOhlcv = () => {
       fetch(`${baseUrl}/ohlcv?symbol=${symbol}&timeframe=${tf}&bars=${barCount}`)
         .then((res) => {
@@ -525,19 +357,16 @@ export default function App() {
           return res.json();
         })
         .then((data) => {
-          //console.log("OHLCV Response:", data); // DEBUG: tampilkan respons OHLCV
           if (!Array.isArray(data)) {
             setOhlcv([]);
             setOhlcvWarning("Format data OHLCV tidak valid dari backend.");
             setOhlcvError(true);
-            stopped = true;
             return;
           }
           if (data.length < barCount) {
             setOhlcv([]);
             setOhlcvWarning(`Data tidak cukup untuk menampilkan ${barCount} bar. Hanya tersedia ${data.length} bar.`);
             setOhlcvError(true);
-            stopped = true;
             return;
           }
           setOhlcv(data);
@@ -549,832 +378,662 @@ export default function App() {
           setOhlcvError(true);
           setOhlcvWarning("");
         });
-      if (!stopped) timer = setTimeout(fetchOhlcv, 1000);
     };
     fetchOhlcv();
-    return () => clearTimeout(timer);
+    const timer = setInterval(fetchOhlcv, 1000);
+    return () => clearInterval(timer);
   }, [symbol, tf, barCount, engine]);
-
-  useEffect(() => {
-    let ws;
-    let pollingFallback;
-    let wsActive = false;
-    function startPolling() {
-      const baseUrl = getBackendUrl(engine, 'http');
-      const fetchSignal = () => {
-        fetch(`${baseUrl}/signal?symbol=${symbol}&mode=${tradeMode}`)
-          .then(res => res.json())
-          .then(data => {
-            if (data.error) {
-              setSignalError(data.error + (data.details ? ': ' + JSON.stringify(data.details) : ''));
-              setSignal('wait');
-              setIndicators({});
-              setSim({ balance: 1000, open_trade: false, pnl: 0 });
-              return;
-            } else {
-              setSignalError(null);
-            }
-            setPrevSignal(signal);
-            setSignal(data.signal);
-            setPrevIndicators(indicators);
-            setIndicators(data.indicators);
-            setSim(data.simulator);
-          });
-      };
-      fetchSignal();
-      pollingFallback = setInterval(fetchSignal, 3000); // fallback polling setiap 3 detik
-    }
-
-    try {
-      ws = new ReconnectingWebSocket(`${WS_URL}?symbol=${symbol}&mode=${tradeMode}&engine=${engine}`);
-      ws.onopen = () => { wsActive = true; };
-      ws.onmessage = (e) => {
-        wsActive = true;
-        const data = JSON.parse(e.data);
-        if (data.error) {
-          setSignalError(data.error + (data.details ? ': ' + JSON.stringify(data.details) : ''));
-          setSignal('wait');
-          setIndicators({});
-          setSim({ balance: 1000, open_trade: false, pnl: 0 });
-          return;
-        } else {
-          setSignalError(null);
-        }
-        setPrevSignal(signal);
-        setSignal(data.signal);
-        setPrevIndicators(indicators);
-        setIndicators(data.indicators);
-        setSim(data.simulator);
-      };
-      ws.onerror = () => {
-        wsActive = false;
-        if (!pollingFallback) startPolling();
-      };
-      ws.onclose = () => {
-        wsActive = false;
-        if (!pollingFallback) startPolling();
-      };
-    } catch (e) {
-      startPolling();
-    }
-    // Fallback polling jika websocket tidak aktif
-    setTimeout(() => { if (!wsActive && !pollingFallback) startPolling(); }, 2000);
-    return () => {
-      if (ws) ws.close();
-      if (pollingFallback) clearInterval(pollingFallback);
-    };
-  }, [symbol, tradeMode, engine]);
 
   useEffect(() => {
     if (prevSignal && signal && prevSignal !== signal) {
       setSnackbarMsg(`Signal berubah dari ${prevSignal.toUpperCase()} ke ${signal.toUpperCase()}`);
       setSnackbarOpen(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signal]);
+    if (signal === "buy" || signal === "sell") {
+      setLastSignalTime(Math.floor(Date.now() / 1000));
+      setLastSignalPrice(lastPrice);
+      setLastActionableSignal(signal);
+    }
+  }, [signal, prevSignal, lastPrice]);
 
+  const activeBroker =
+    brokers.find((b) => String(b.id) === String(selectedBrokerId)) ||
+    (defaultBroker && String(defaultBroker.id) === String(selectedBrokerId) ? defaultBroker : null) ||
+    defaultBroker ||
+    brokers.find((b) => b.is_default) ||
+    brokers[0] ||
+    null;
 
-  // (Dihapus: useEffect fetch OHLCV dengan bars=60 yang menyebabkan konflik data)
+  useEffect(() => {
+    if (!selectedBrokerId && activeBroker) {
+      setSelectedBrokerId(String(activeBroker.id));
+      if (activeBroker.execution_mode) setSelectedOrderMethod(activeBroker.execution_mode);
+    }
+  }, [selectedBrokerId, activeBroker]);
 
-  // Prepare candlestick data (placeholder)
-  // const chartData = { ... };
-  // const chartOptions = { ... };
+  useEffect(() => {
+    const brokerId = selectedBrokerId || (activeBroker ? String(activeBroker.id) : "") || (defaultBroker ? String(defaultBroker.id) : "");
+    if (!brokerId) {
+      setBrokerOrderStatus(null);
+      return;
+    }
+
+    const fetchBrokerOrderStatus = () => {
+      fetch(`${getBackendUrl("mt5", "http")}/brokers/${brokerId}/order_status?symbol=${symbol}`)
+        .then((res) => {
+          if (!res.ok) throw new Error("Failed");
+          return res.json();
+        })
+        .then((data) => setBrokerOrderStatus(data))
+        .catch(() => setBrokerOrderStatus({ can_open_order: false, reason: "status_endpoint_unavailable" }));
+    };
+
+    fetchBrokerOrderStatus();
+    const timer = setInterval(fetchBrokerOrderStatus, 5000);
+    return () => clearInterval(timer);
+  }, [selectedBrokerId, activeBroker, defaultBroker, symbol]);
+
+  const mapBrokerOrderStatusText = (status) => {
+    if (!status) return "status tidak tersedia";
+    if (status.can_open_order) return "New Order: enabled";
+
+    const reasonMap = {
+      terminal_path_missing: "terminal path belum diisi",
+      mt5_initialize_failed: "gagal init MT5 terminal",
+      terminal_disconnected: "terminal tidak terkoneksi",
+      terminal_trade_disabled: "AutoTrading terminal OFF (New Order disabled)",
+      account_trade_disabled: "akun tidak mengizinkan trade",
+      symbol_not_visible: `symbol ${symbol} tidak visible`,
+      no_tick_data: `tick ${symbol} belum tersedia`,
+      no_broker_available: "broker tidak tersedia",
+      status_endpoint_unavailable: "status endpoint tidak tersedia",
+    };
+    return reasonMap[status.reason] || `New Order: disabled (${status.reason || "unknown"})`;
+  };
+
+  const handleManualOpen = async (tradeType) => {
+    const lot = Math.max(0.01, Number(manualLot || 0.01));
+    setManualTradeLoading(true);
+    try {
+      const res = await fetch(`${getBackendUrl("mt5", "http")}/trade/open_v2`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          symbol,
+          lot,
+          trade_type: tradeType,
+          signal_time: Math.floor(Date.now() / 1000),
+          broker_id: selectedBrokerId ? Number(selectedBrokerId) : null,
+          order_method: selectedOrderMethod,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.status === "error") {
+        throw new Error(data.message || "Failed to open trade.");
+      }
+      setSnackbarMsg(`Manual ${tradeType.toUpperCase()} order sent.`);
+      setSnackbarOpen(true);
+      refreshOpenPositions();
+      refreshOpenCount();
+    } catch (err) {
+      setSnackbarMsg(String(err.message || "Failed to open trade."));
+      setSnackbarOpen(true);
+    } finally {
+      setManualTradeLoading(false);
+    }
+  };
+
+  const handleSaveTradeTPSL = async (tradeId) => {
+    const id = String(tradeId);
+    const draft = tpSlDrafts[id] || { tpValue: "", slValue: "" };
+    setTradeActionLoading((prev) => ({ ...prev, [id]: true }));
+    try {
+      const res = await fetch(`${getBackendUrl("mt5", "http")}/trade/update_tpsl`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trade_id: id,
+          tp_value: toNullableNumber(draft.tpValue),
+          sl_value: toNullableNumber(draft.slValue),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== "ok") {
+        throw new Error(data.message || "Failed to update TP/SL.");
+      }
+      setSnackbarMsg("TP/SL updated from backend.");
+      setSnackbarOpen(true);
+      refreshOpenPositions();
+    } catch (err) {
+      setSnackbarMsg(String(err.message || "Failed to update TP/SL."));
+      setSnackbarOpen(true);
+    } finally {
+      setTradeActionLoading((prev) => ({ ...prev, [id]: false }));
+    }
+  };
+
+  const handleCloseTrade = async (trade, index) => {
+    const id = String(trade.trade_id || trade.ticket || index);
+    setTradeActionLoading((prev) => ({ ...prev, [id]: true }));
+    try {
+      let res;
+      if (String(trade.execution_mode || "").toLowerCase() === "mouse") {
+        res = await fetch(`${getBackendUrl("mt5", "http")}/trade/close_by_index`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ index }),
+        });
+      } else {
+        res = await fetch(`${getBackendUrl("mt5", "http")}/trade/close`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            symbol: trade.symbol,
+            lot: trade.lot,
+            ticket: trade.ticket,
+          }),
+        });
+      }
+      const data = await res.json();
+      if (!res.ok || data.status === "error") {
+        throw new Error(data.message || "Failed to close trade.");
+      }
+      setSnackbarMsg("Trade close request sent to backend.");
+      setSnackbarOpen(true);
+      refreshOpenPositions();
+      refreshOpenCount();
+      refreshAccountState();
+    } catch (err) {
+      setSnackbarMsg(String(err.message || "Failed to close trade."));
+      setSnackbarOpen(true);
+    } finally {
+      setTradeActionLoading((prev) => ({ ...prev, [id]: false }));
+    }
+  };
 
   return (
-    <>
-      <ThemeProvider theme={theme}>
-        <CssBaseline />
-        <Box sx={{ p: { xs: 1, sm: 2 }, maxWidth: 1200, mx: 'auto', width: '100%' }}>
-          <Snackbar open={snackbarOpen} autoHideDuration={2500} onClose={() => setSnackbarOpen(false)} anchorOrigin={{vertical:'bottom',horizontal:'center'}}>
-            <MuiAlert onClose={() => setSnackbarOpen(false)} severity={signal === 'buy' ? 'success' : 'info'} sx={{ width: '100%' }}>
-              {snackbarMsg}
-            </MuiAlert>
-          </Snackbar>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-            <Typography variant="h4" gutterBottom>
-              Trading Signal Dashboard
-            </Typography>
-            <Button variant="outlined" color="secondary" sx={{ml:2}} onClick={() => {
-              if (canLateFollow(signal, lastSignalTime, ohlcv, 60)) {
-                setLateFollowMsg('Still safe to late follow this signal (<= 60 seconds).');
-              } else {
-                setLateFollowMsg('Too late/not recommended to late follow.');
-              }
-            }}>
-              Check for Late Follow
-            </Button>
-            {lateFollowMsg && (
-              <Typography variant="body2" color={lateFollowMsg.includes('safe') ? 'green' : 'red'} sx={{ml:2, mt:1}}>
-                {lateFollowMsg}
-              </Typography>
-            )}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <FormControl size="small" sx={{ minWidth: 120 }}>
-                <InputLabel id="engine-label">Engine</InputLabel>
-                <Select
-                  labelId="engine-label"
-                  value={engine}
-                  label="Engine"
-                  onChange={e => setEngine(e.target.value)}
-                >
-                  <MenuItem value="mt5">MT5 (Live)</MenuItem>
-                  <MenuItem value="sim">Simulation</MenuItem>
-                </Select>
-              </FormControl>
-              <FormControl size="small" sx={{ minWidth: 120 }}>
-                <InputLabel id="trade-mode-label">Mode</InputLabel>
-                <Select
-                  labelId="trade-mode-label"
-                  value={tradeMode}
-                  label="Mode"
-                  onChange={e => setTradeMode(e.target.value)}
-                >
-                  <MenuItem value="normal">Normal</MenuItem>
-                  <MenuItem value="scalp">Scalp</MenuItem>
-                </Select>
-              </FormControl>
-              <FormControlLabel
-                control={<Switch checked={darkMode} onChange={() => setDarkMode(v => !v)} color="primary" />}
-                label={darkMode ? 'Dark Mode' : 'Light Mode'}
-              />
-            </Box>
-          </Box>
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <Box sx={{ p: { xs: 1, sm: 2 }, maxWidth: 1200, mx: "auto", width: "100%" }}>
+        <Snackbar
+          open={snackbarOpen}
+          autoHideDuration={2500}
+          onClose={() => setSnackbarOpen(false)}
+          anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+        >
+          <MuiAlert onClose={() => setSnackbarOpen(false)} severity={signal === "buy" ? "success" : "info"} sx={{ width: "100%" }}>
+            {snackbarMsg}
+          </MuiAlert>
+        </Snackbar>
 
-      {/* Panel Preset Strategi & Parameter */}
-      <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 2, mt: 2 }}>
-        <Typography variant="h6" sx={{ mb: 1 }}>Strategy Preset & Indicator Parameters</Typography>
-        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2, alignItems: 'center' }}>
-          <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel id="preset-label">Preset</InputLabel>
-            <Select labelId="preset-label" value={selectedPreset} label="Preset" onChange={e => setSelectedPreset(e.target.value)}>
-              {strategyPresets.map(p => <MenuItem key={p.value} value={p.value}>{p.label}</MenuItem>)}
-            </Select>
-          </FormControl>
-          {/* Parameter indikator */}
-          <TextField label="RSI Period" type="number" size="small" value={indicatorParams.rsi} onChange={e => handleParamChange('rsi', Number(e.target.value))} sx={{ width: 100 }} />
-          <TextField label="RSI Level" type="number" size="small" value={indicatorParams.rsiLevel} onChange={e => handleParamChange('rsiLevel', Number(e.target.value))} sx={{ width: 100 }} />
-          <TextField label="MACD Fast" type="number" size="small" value={indicatorParams.macdFast} onChange={e => handleParamChange('macdFast', Number(e.target.value))} sx={{ width: 100 }} />
-          <TextField label="MACD Slow" type="number" size="small" value={indicatorParams.macdSlow} onChange={e => handleParamChange('macdSlow', Number(e.target.value))} sx={{ width: 100 }} />
-          <TextField label="MACD Signal" type="number" size="small" value={indicatorParams.macdSignal} onChange={e => handleParamChange('macdSignal', Number(e.target.value))} sx={{ width: 100 }} />
-          <TextField label="Stoch K" type="number" size="small" value={indicatorParams.stochK} onChange={e => handleParamChange('stochK', Number(e.target.value))} sx={{ width: 100 }} />
-          <TextField label="Stoch D" type="number" size="small" value={indicatorParams.stochD} onChange={e => handleParamChange('stochD', Number(e.target.value))} sx={{ width: 100 }} />
-          <TextField label="Stoch S" type="number" size="small" value={indicatorParams.stochS} onChange={e => handleParamChange('stochS', Number(e.target.value))} sx={{ width: 100 }} />
-          <TextField label="BB Period" type="number" size="small" value={indicatorParams.bbPeriod} onChange={e => handleParamChange('bbPeriod', Number(e.target.value))} sx={{ width: 100 }} />
-          <TextField label="BB Std" type="number" size="small" value={indicatorParams.bbStd} onChange={e => handleParamChange('bbStd', Number(e.target.value))} sx={{ width: 100 }} />
-          <TextField label="MA Period" type="number" size="small" value={indicatorParams.maPeriod} onChange={e => handleParamChange('maPeriod', Number(e.target.value))} sx={{ width: 100 }} />
-        </Box>
-        <Typography variant="caption" sx={{ mt: 1, display: 'block' }}>
-          * Changing parameters only affects chart/indicator visualization. Trade signals (open/close) always follow backend.
-        </Typography>
-      </Paper>
-      {signalError && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {signalError}
-        </Alert>
-      )}
-      {ohlcvError && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
-          {ohlcvWarning ? (
-            <>
-              {ohlcvWarning}<br />
-              <Button variant="outlined" size="small" sx={{ mt: 1 }} onClick={() => {
-                setOhlcvWarning("");
-                setOhlcvError(false);
-                setBarCount(barCount); // trigger refetch
-              }}>Retry Fetch</Button>
-            </>
-          ) : (
-            <>
-              Candlestick data not available.<br />
-              <b>Make sure FastAPI backend is running at <code>localhost:8000</code></b>.<br />
-              Run: <code>uvicorn app.main:app --reload</code> in the backend folder.<br />
-              After backend is active, refresh this page.
-            </>
-          )}
-        </Alert>
-      )}
-      <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 2, overflowX: 'auto', width: '100%' }}>
-        <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} sm={3}>
-            <TextField label="Symbol" value={symbol} onChange={e => setSymbol(e.target.value)} size="small" fullWidth />
-          </Grid>
-          <Grid item xs={12} sm={4}>
-            <ButtonGroup variant="outlined" color="primary" size="small">
-              {['M1','M5','M15','M30'].map(opt => (
-                <Button
-                  key={opt}
-                  variant={tf === opt ? 'contained' : 'outlined'}
-                  onClick={() => setTf(opt)}
-                >{opt}</Button>
-              ))}
-            </ButtonGroup>
-          </Grid>
-          <Grid item xs={12} sm={3}>
-            <FormControl size="small" fullWidth>
-              <InputLabel id="bar-count-label">Range</InputLabel>
-              <Select
-                labelId="bar-count-label"
-                value={barCount}
-                label="Range"
-                onChange={e => setBarCount(Number(e.target.value))}
-              >
-                <MenuItem value={30}>30 Bars</MenuItem>
-                <MenuItem value={60}>60 Bars</MenuItem>
-                <MenuItem value={120}>120 Bars</MenuItem>
-                <MenuItem value={240}>240 Bars</MenuItem>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 1, gap: 2, flexWrap: "wrap" }}>
+          <Typography variant="h4">Trading Signal Dashboard</Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <FormControl size="small" sx={{ minWidth: 120 }}>
+              <InputLabel id="engine-label">Engine</InputLabel>
+              <Select labelId="engine-label" value={engine} label="Engine" onChange={(e) => setEngine(e.target.value)}>
+                <MenuItem value="mt5">MT5 (Live)</MenuItem>
+                <MenuItem value="sim">Simulation</MenuItem>
               </Select>
             </FormControl>
-          </Grid>
-          <Grid item xs={12} sm={2}>
-            <Button variant="contained" color="primary" fullWidth onClick={() => {
-              setSymbol(symbol);
-              setTf(tf);
-            }}>
-              Update
-            </Button>
-          </Grid>
-        </Grid>
-      </Paper>
+            <FormControl size="small" sx={{ minWidth: 120 }}>
+              <InputLabel id="trade-mode-label">Mode</InputLabel>
+              <Select labelId="trade-mode-label" value={tradeMode} label="Mode" onChange={(e) => setTradeMode(e.target.value)}>
+                <MenuItem value="normal">Normal</MenuItem>
+                <MenuItem value="scalp">Scalp</MenuItem>
+              </Select>
+            </FormControl>
+            <FormControlLabel
+              control={<Switch checked={darkMode} onChange={() => setDarkMode((v) => !v)} color="primary" />}
+              label={darkMode ? "Dark Mode" : "Light Mode"}
+            />
+          </Box>
+        </Box>
 
-      <Paper sx={{
-        p: { xs: 1, sm: 2 },
-        mb: 2,
-        background: (theme) =>
-          signal === 'buy'
-            ? (theme.palette.mode === 'dark'
-                ? 'linear-gradient(90deg,#1de9b6 0%,#00bfae 100%)'
-                : 'linear-gradient(90deg,#43e97b 0%,#38f9d7 100%)')
-            : (theme.palette.mode === 'dark'
-                ? 'linear-gradient(90deg,#23272b 0%,#444950 100%)'
-                : 'linear-gradient(90deg,#ece9e6 0%,#bab9b6 100%)'),
-        border: signal === 'buy' ? '2px solid #1b5e20' : '1px solid #888',
-        boxShadow: signal === 'buy' ? '0 0 12px 2px #43e97b55' : '0 0 8px 1px #bab9b655',
-        transition: 'all 0.4s',
-        overflowX: 'auto',
-        color: (theme) => theme.palette.mode === 'dark' ? '#fff' : undefined,
-        width: '100%',
-        '@media (max-width:600px)': {
-          padding: '8px !important',
-          marginBottom: '10px',
-        },
-      }}>
-        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2 }}>
-          {/* Left Signal Panel */}
-          <Box sx={{ flex: 1, minWidth: 0 }}>
-            {/* Flip-flop panel for reversal warning or signal */}
-            {reversalWarning ? (
-              <Box sx={{
-                p: 2,
-                mb: 1,
-                borderRadius: 2,
-                background: 'linear-gradient(90deg,#ff1744 0%,#ff9100 100%)',
-                color: '#fff',
-                fontWeight: 'bold',
-                fontSize: 20,
-                textAlign: 'center',
-                boxShadow: '0 0 12px 2px #ff174455',
-                letterSpacing: 2,
-                transition: 'all 0.4s',
-              }}>
-                REVERSAL WARNING: {reversalWarning}
-              </Box>
-            ) : (
-              <Typography variant="h6" sx={{ fontWeight:'bold', letterSpacing:2 }}>
-                Signal: <b style={{ color: signal === "buy" ? "#1b5e20" : "#424242", fontWeight:'bold', fontSize:22 }}>{signal ? signal.toUpperCase() : '-'}</b>
+        {signalError && <Alert severity="error" sx={{ mb: 2 }}>{signalError}</Alert>}
+        {ohlcvError && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            {ohlcvWarning || "Candlestick data not available."}
+          </Alert>
+        )}
+
+        <Paper
+          sx={{
+            p: { xs: 1, sm: 2 },
+            mb: 2,
+            overflowX: "auto",
+            width: "100%",
+            border: `2px solid ${signal === "wait" ? "#bdbdbd" : getSignalColor(signal)}`,
+            animation: signal === "wait" ? "none" : "tradePanelPulse 1s infinite",
+            "@keyframes tradePanelPulse": {
+              "0%": { backgroundColor: "transparent" },
+              "50%": { backgroundColor: signal === "buy" ? "rgba(56,142,60,0.10)" : "rgba(211,47,47,0.10)" },
+              "100%": { backgroundColor: "transparent" },
+            },
+          }}
+        >
+          <Grid container spacing={2} alignItems="center">
+            <Grid item xs={12} sm={3}>
+              <TextField label="Symbol" value={symbol} onChange={(e) => setSymbol(e.target.value)} size="small" fullWidth />
+            </Grid>
+            <Grid item xs={12} sm={4}>
+              <ButtonGroup variant="outlined" color="primary" size="small">
+                {["M1", "M5", "M15", "M30"].map((opt) => (
+                  <Button key={opt} variant={tf === opt ? "contained" : "outlined"} onClick={() => setTf(opt)}>{opt}</Button>
+                ))}
+              </ButtonGroup>
+            </Grid>
+            <Grid item xs={12} sm={3}>
+              <FormControl size="small" fullWidth>
+                <InputLabel id="bar-count-label">Range</InputLabel>
+                <Select labelId="bar-count-label" value={barCount} label="Range" onChange={(e) => setBarCount(Number(e.target.value))}>
+                  <MenuItem value={30}>30 Bars</MenuItem>
+                  <MenuItem value={60}>60 Bars</MenuItem>
+                  <MenuItem value={120}>120 Bars</MenuItem>
+                  <MenuItem value={240}>240 Bars</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12} sm={2}>
+              <Button variant="contained" color="primary" fullWidth onClick={() => { setSymbol(symbol); setTf(tf); }}>
+                Update
+              </Button>
+            </Grid>
+          </Grid>
+        </Paper>
+
+        <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 2, overflowX: "auto", width: "100%" }}>
+          <Box sx={{ display: "flex", flexDirection: { xs: "column", md: "row" }, gap: 2 }}>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography variant="h6" sx={{ fontWeight: "bold", letterSpacing: 2 }}>
+                Signal: <b style={{ color: signal === "buy" ? "#1b5e20" : "#424242" }}>{signal ? signal.toUpperCase() : "-"}</b>
               </Typography>
-            )}
-            {/* Current Price */}
-            {ohlcv && ohlcv.length > 0 && (
-              <Typography variant="body2" sx={{ mt: 1, fontWeight: 'bold', color: '#1976d2' }}>
-                Current Price: {ohlcv[ohlcv.length-1].close?.toFixed(2)}
-              </Typography>
-            )}
-            {/* Main indicator summary for active timeframe */}
-            {indicators && indicators[tf] ? (
-              <Box sx={{ mt: 1 }}>
-                <Typography variant="subtitle2">Summary {symbol} {tf}:</Typography>
-                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14, color: darkMode ? '#fff' : undefined }}>
-                  <li>RSI: <b style={{color: indicators[tf].rsi < 0 ? 'red' : undefined}}>{indicators[tf].rsi?.toFixed(2)}</b></li>
-                  <li>MACD: <b style={{color: indicators[tf].macd < 0 ? 'red' : undefined}}>{indicators[tf].macd?.toFixed(2)}</b> | Signal: <b style={{color: indicators[tf].macd_signal < 0 ? 'red' : undefined}}>{indicators[tf].macd_signal?.toFixed(2)}</b></li>
-                  <li>Bollinger Bands: <b style={{color: indicators[tf].bb_lower < 0 ? 'red' : undefined}}>{indicators[tf].bb_lower?.toFixed(2)}</b> - <b style={{color: indicators[tf].bb_mid < 0 ? 'red' : undefined}}>{indicators[tf].bb_mid?.toFixed(2)}</b> - <b style={{color: indicators[tf].bb_upper < 0 ? 'red' : undefined}}>{indicators[tf].bb_upper?.toFixed(2)}</b></li>
-                  <li>SMA: <b style={{color: indicators[tf].sma < 0 ? 'red' : undefined}}>{indicators[tf].sma?.toFixed(2)}</b></li>
-                  <li>Stoch K/D: <b style={{color: indicators[tf].stoch_k < 0 ? 'red' : undefined}}>{indicators[tf].stoch_k?.toFixed(2)}</b> / <b style={{color: indicators[tf].stoch_d < 0 ? 'red' : undefined}}>{indicators[tf].stoch_d?.toFixed(2)}</b></li>
-                </ul>
-              </Box>
-            ) : null}
-            {/* Last data time info */}
-            {ohlcv && ohlcv.length > 0 && (
-              <Typography variant="caption" sx={{ display: 'block', mt: 1 }}>
-                Last data (GMT+2): {(() => {
-                  const t = ohlcv[ohlcv.length-1].time;
-                  if (!t) return '-';
-                  // Convert epoch (UTC) to GMT+2
-                  const dt = new Date((t + 2 * 3600) * 1000);
-                  return dt.toLocaleString();
-                })()} &nbsp;|&nbsp; 
-                <span style={{color:'#888'}}>Note: Broker server time is usually GMT+2/GMT+3, this time = GMT+2</span>
-              </Typography>
-            )}
-          </Box>
-          {/* Right Simulation Panel */}
-          <Box sx={{ flex: 1, minWidth: 0, borderLeft: { md: '1px solid #eee' }, pl: { md: 2, xs: 0 }, mt: { xs: 2, md: 0 } }}>
-            <Typography variant="subtitle1" sx={{ fontWeight:'bold', letterSpacing:1, mb: 1 }}>Trading Panel (Follow Signal, 0.01 lot)</Typography>
-            <Typography variant="body2">
-              Balance: <span style={{color: accountState && accountState.balance < 0 ? 'red' : undefined}}>{
-                accountState && typeof accountState.balance === 'number'
-                  ? `$${accountState.balance.toFixed(2)}`
-                  : '$1000.00'
-              }</span>
-              {' | '}Mode: <b style={{color: accountState && accountState.enable_real_trade ? '#1b5e20' : '#888'}}>
-                {accountState && accountState.enable_real_trade ? 'REAL (MT5)' : 'SIMULATION'}
-              </b>
-              {' | '}Floating PnL: <span style={{color: simu && simu.pnl < 0 ? 'red' : undefined}}>{simu && typeof simu.pnl === 'number' ? simu.pnl.toFixed(2) : '-'}</span>
-              {' | '}Open Trade: {simu && simu.openTrade ? (simu.direction === 'buy' ? 'Buy' : 'Sell') : 'No'}
-            </Typography>
-            {/* Tombol Buy/Sell manual */}
-            <Box sx={{ display: 'flex', gap: 2, mt: 2 }}>
-              <Button
-                variant="contained"
-                color="success"
-                disabled={simu && simu.openTrade}
-                onClick={async () => {
-                  if (accountState && accountState.enable_real_trade) {
-                    // Real trade ke MT5
-                    await fetch(`${getBackendUrl('mt5', 'http')}/trade/open`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ symbol, lot: accountState.lot || 0.01, trade_type: 'buy', signal_time: Math.floor(Date.now()/1000) })
-                    });
-                  } else {
-                    // Simulasi: trigger open buy
-                    setSignal('buy');
-                  }
-                }}
-              >Buy</Button>
-              <Button
-                variant="contained"
-                color="error"
-                disabled={simu && simu.openTrade}
-                onClick={async () => {
-                  if (accountState && accountState.enable_real_trade) {
-                    // Real trade ke MT5
-                    await fetch(`${getBackendUrl('mt5', 'http')}/trade/open`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ symbol, lot: accountState.lot || 0.01, trade_type: 'sell', signal_time: Math.floor(Date.now()/1000) })
-                    });
-                  } else {
-                    // Simulasi: trigger open sell
-                    setSignal('sell');
-                  }
-                }}
-              >Sell</Button>
-            </Box>
-            {/* Checklist and custom TP input */}
-            <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, gap: 2 }}>
-              <TextField
-                label="TP Value"
-                size="small"
-                type="number"
-                value={tpValue}
-                onChange={e => setTpValue(Number(e.target.value))}
-                sx={{ width: 200 }}
-                disabled={autoTPSL}
-                inputProps={{ step: 0.1 }}
-              />
-              <TextField
-                label="SL Value"
-                size="small"
-                type="number"
-                value={slValue ?? ''}
-                onChange={e => setSlValue(e.target.value === '' ? null : Number(e.target.value))}
-                sx={{ width: 200, ml: 2 }}
-                disabled={autoTPSL}
-                inputProps={{ step: 0.1 }}
-              />
-              <FormControlLabel
-                control={<Checkbox checked={autoTPSL} onChange={e => setAutoTPSL(e.target.checked)} />}
-                label={<Typography variant="body2" color="primary">Auto Analytic TP/SL</Typography>}
-                sx={{ml:2}}
-              />
-              <Typography variant="caption">(in price units, e.g. 5 = 5 USD)</Typography>
-            </Box>
-            {/* Checklist for indicator reversal warning */}
-            <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
-              <Checkbox checked={enableReversalWarning} onChange={e => setEnableReversalWarning(e.target.checked)} />
-              <Typography variant="body2">Enable indicator reversal warning (RSI drop, fast stochastic overbought/oversold)</Typography>
-            </Box>
-            {simu && simu.openTrade && (
-              <>
-                <Typography variant="body2" sx={{ mt: 1 }}>
-                  Entry: {simu.entryPrice ?? '-'} @ {simu.entryTime ? new Date(simu.entryTime * 1000).toLocaleString() : '-'} | Direction: {simu.direction ? simu.direction.toUpperCase() : '-'}
+              {lastPrice !== null && (
+                <Typography variant="body2" sx={{ mt: 1, fontWeight: "bold", color: "#1976d2" }}>
+                  Current Price: {lastPrice.toFixed(2)}
                 </Typography>
-                {/* Target profit estimation: fixed TP 10 pip (1 pip = 0.1 XAUUSD) or custom if checklist active */}
-                <Typography variant="body2" sx={{ mt: 1, color: '#1976d2' }}>
-                  Target Profit Estimate: {(() => {
-                    if (!simu.entryPrice || !simu.direction) return '-';
-                    if (useCustomTP && customTP > 0) {
-                      if (simu.direction === 'buy') {
-                        return (simu.entryPrice + customTP).toFixed(2);
-                      } else if (simu.direction === 'sell') {
-                        return (simu.entryPrice - customTP).toFixed(2);
-                      }
+              )}
+              {indicators && indicators[tf] ? (
+                <Box sx={{ mt: 1 }}>
+                  <Typography variant="subtitle2">Summary {symbol} {tf}:</Typography>
+                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14 }}>
+                    <li>RSI: {indicators[tf].rsi?.toFixed(2)}</li>
+                    <li>MACD: {indicators[tf].macd?.toFixed(2)} | Signal: {indicators[tf].macd_signal?.toFixed(2)}</li>
+                    <li>Bollinger: {indicators[tf].bb_lower?.toFixed(2)} - {indicators[tf].bb_mid?.toFixed(2)} - {indicators[tf].bb_upper?.toFixed(2)}</li>
+                    <li>SMA: {indicators[tf].sma?.toFixed(2)}</li>
+                    <li>Stoch K/D: {indicators[tf].stoch_k?.toFixed(2)} / {indicators[tf].stoch_d?.toFixed(2)}</li>
+                  </ul>
+                </Box>
+              ) : null}
+            </Box>
+
+            <Box
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                borderLeft: { md: "1px solid #eee" },
+                pl: { md: 2, xs: 0 },
+                mt: { xs: 2, md: 0 },
+                borderRadius: 1,
+                border: `2px solid ${signal === "wait" ? "#bdbdbd" : getSignalColor(signal)}`,
+                animation: signal === "wait" ? "none" : "tradePanelPulse 1s infinite",
+                "@keyframes tradePanelPulse": {
+                  "0%": { backgroundColor: "transparent" },
+                  "50%": { backgroundColor: signal === "buy" ? "rgba(56,142,60,0.10)" : "rgba(211,47,47,0.10)" },
+                  "100%": { backgroundColor: "transparent" },
+                },
+              }}
+            >
+              <Typography variant="subtitle1" sx={{ fontWeight: "bold", letterSpacing: 1, mb: 1 }}>Trading Panel</Typography>
+              <Typography variant="body2">
+                Total Balance: <span style={{ color: accountState.balance < 0 ? "red" : undefined }}>${Number(accountState.balance || 0).toFixed(2)}</span>
+                {" | "}Mode: <b style={{ color: accountState.enable_real_trade ? "#1b5e20" : "#888" }}>{accountState.enable_real_trade ? "REAL (MT5)" : "SIMULATION"}</b>
+                {" | "}Total Floating P/L: <span style={{ color: totalFloatingPnl < 0 ? "red" : "#1b5e20" }}>{Number(totalFloatingPnl || 0).toFixed(2)}</span>
+                {" | "}Open Count(DB): {openTradeCount}
+              </Typography>
+
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                Broker: <b>{activeBroker ? (activeBroker.name.length > 24 ? `${activeBroker.name.slice(0, 24)}...` : activeBroker.name) : "-"}</b>
+                {" | "}
+                <span
+                  style={{
+                    color: brokerOrderStatus?.can_open_order ? "#1b5e20" : "#b71c1c",
+                    fontWeight: 600,
+                  }}
+                >
+                  {mapBrokerOrderStatusText(brokerOrderStatus)}
+                </span>
+              </Typography>
+
+              <Box sx={{ display: "flex", alignItems: "center", mt: 1, gap: 2, flexWrap: "wrap" }}>
+                <FormControlLabel
+                  control={<Switch checked={autoTradeEnabled} onChange={(e) => setAutoTradeEnabled(e.target.checked)} />}
+                  label="Auto Trade Backend"
+                />
+                <FormControlLabel
+                  control={<Switch checked={keepTerminalAlive} onChange={(e) => setKeepTerminalAlive(e.target.checked)} />}
+                  label="Keep Terminal Alive"
+                />
+              </Box>
+
+              <Box sx={{ display: "flex", alignItems: "center", mt: 1, gap: 2, flexWrap: "wrap" }}>
+                <FormControl size="small" sx={{ minWidth: 180 }}>
+                  <InputLabel id="manual-broker-label">Broker</InputLabel>
+                  <Select
+                    labelId="manual-broker-label"
+                    label="Broker"
+                    value={selectedBrokerId}
+                    onChange={(e) => {
+                      const nextId = e.target.value;
+                      setSelectedBrokerId(nextId);
+                      const broker = brokers.find((b) => String(b.id) === String(nextId));
+                      if (broker?.execution_mode) setSelectedOrderMethod(broker.execution_mode);
+                    }}
+                  >
+                    {brokers.map((b) => (
+                      <MenuItem key={b.id} value={String(b.id)}>
+                        {b.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <FormControl size="small" sx={{ minWidth: 150 }}>
+                  <InputLabel id="manual-exec-label">Exec</InputLabel>
+                  <Select
+                    labelId="manual-exec-label"
+                    label="Exec"
+                    value={selectedOrderMethod}
+                    onChange={(e) => setSelectedOrderMethod(e.target.value)}
+                  >
+                    <MenuItem value="mouse">mouse</MenuItem>
+                    <MenuItem value="direct">direct</MenuItem>
+                  </Select>
+                </FormControl>
+                <TextField
+                  label="Lot"
+                  size="small"
+                  type="number"
+                  value={manualLot}
+                  onChange={(e) => setManualLot(Math.max(0.01, Number(e.target.value || 0.01)))}
+                  sx={{ width: 110 }}
+                  inputProps={{ min: 0.01, step: 0.01 }}
+                />
+                <Button
+                  variant="contained"
+                  color="success"
+                  disabled={manualTradeLoading}
+                  onClick={() => handleManualOpen("buy")}
+                >
+                  Buy
+                </Button>
+                <Button
+                  variant="contained"
+                  color="error"
+                  disabled={manualTradeLoading}
+                  onClick={() => handleManualOpen("sell")}
+                >
+                  Sell
+                </Button>
+              </Box>
+
+              <Box sx={{ display: "flex", alignItems: "center", mt: 1, gap: 2, flexWrap: "wrap" }}>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={() => {
+                    const ok = canLateFollow({
+                      signal: lastActionableSignal,
+                      signalTime: lastSignalTime,
+                      signalPrice: lastSignalPrice,
+                      currentPrice: lastPrice,
+                      maxDelaySec: 60,
+                      maxPriceDrift: 0.5,
+                    });
+                    if (ok) {
+                      setLateFollowMsg(`Sinyal ${String(lastActionableSignal).toUpperCase()} masih relevan untuk late entry.`);
                     } else {
-                      const pip = 0.1;
-                      const tpPip = 10; // 10 pip
-                      if (simu.direction === 'buy') {
-                        return (simu.entryPrice + pip * tpPip).toFixed(2);
-                      } else if (simu.direction === 'sell') {
-                        return (simu.entryPrice - pip * tpPip).toFixed(2);
-                      }
+                      setLateFollowMsg("Late entry sudah tidak relevan untuk sinyal terakhir.");
                     }
-                    return '-';
-                  })()}
-                </Typography>
-              </>
-            )}
-            {simu && Array.isArray(simu.tradeHistory) && simu.tradeHistory.length > 0 && (
-              <Box sx={{ mt: 1 }}>
-                <Typography variant="caption" sx={{ fontWeight:'bold' }}>Last Closed Trade:</Typography>
-                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
-                  <li>Type: {simu.tradeHistory[simu.tradeHistory.length-1]?.type ?? '-'}</li>
-                  <li>Entry: {simu.tradeHistory[simu.tradeHistory.length-1]?.entry ?? '-'}</li>
-                  <li>Exit: {simu.tradeHistory[simu.tradeHistory.length-1]?.exit ?? '-'}</li>
-                  <li>Entry Time: {simu.tradeHistory[simu.tradeHistory.length-1]?.entryTime ? new Date(simu.tradeHistory[simu.tradeHistory.length-1].entryTime * 1000).toLocaleString() : '-'}</li>
-                  <li>Exit Time: {simu.tradeHistory[simu.tradeHistory.length-1]?.exitTime ? new Date(simu.tradeHistory[simu.tradeHistory.length-1].exitTime * 1000).toLocaleString() : '-'}</li>
-                  {simu.tradeHistory[simu.tradeHistory.length-1]?.reason && (
-                    <li>Reason: {simu.tradeHistory[simu.tradeHistory.length-1].reason}</li>
-                  )}
-                  <li>Profit: <span style={{color: simu.tradeHistory[simu.tradeHistory.length-1]?.profit < 0 ? 'red' : '#1b5e20'}}>{typeof simu.tradeHistory[simu.tradeHistory.length-1]?.profit === 'number' ? simu.tradeHistory[simu.tradeHistory.length-1].profit.toFixed(2) : '-'}</span></li>
-                  <li>Entry Time: {simu.tradeHistory[simu.tradeHistory.length-1]?.entryTime ?? '-'}</li>
-                  <li>Exit Time: {simu.tradeHistory[simu.tradeHistory.length-1]?.exitTime ?? '-'}</li>
-                </ul>
+                  }}
+                >
+                  Check Late Entry
+                </Button>
+                {lateFollowMsg ? (
+                  <Typography variant="caption" color={lateFollowMsg.includes("masih relevan") ? "success.main" : "error.main"}>
+                    {lateFollowMsg}
+                  </Typography>
+                ) : null}
               </Box>
-            )}
+              {openTradeCount > 1 ? (
+                <Typography variant="caption" color="warning.main" sx={{ display: "block", mt: 0.5 }}>
+                  Trade aktif lebih dari satu: gunakan tombol Close per row pada panel Active Trades.
+                </Typography>
+              ) : null}
+
+              <Box sx={{ display: "flex", alignItems: "center", mt: 0.5, gap: 2, flexWrap: "wrap" }}>
+                <FormControlLabel
+                  control={<Checkbox checked={accountState.auto_analytic_tpsl === true} disabled />}
+                  label={<Typography variant="caption" color="text.secondary">Auto Analytic TP/SL dikontrol backend</Typography>}
+                />
+              </Box>
+            </Box>
           </Box>
-        </Box>
-      </Paper>
-      <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 2, overflowX: 'auto', width: '100%' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-          <Typography variant="h6">Chart</Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            {/* Hapus dropdown mode waktu, chart hanya pakai waktu MT5 (UTC epoch) */}
-            <Button
-              size="small"
-              variant={chartMode === 'candlestick' ? 'contained' : 'outlined'}
-              onClick={() => setChartMode('candlestick')}
-              sx={{ mr: 1 }}
-            >Candlestick</Button>
-            <Button
-              size="small"
-              variant={chartMode === 'line' ? 'contained' : 'outlined'}
-              onClick={() => setChartMode('line')}
-            >Line</Button>
+        </Paper>
+
+        <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 2, overflowX: "auto", width: "100%" }}>
+          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 1 }}>
+            <Typography variant="h6">Active Trades</Typography>
+            <Button size="small" variant="outlined" onClick={() => { refreshOpenPositions(); refreshOpenCount(); }}>
+              Refresh
+            </Button>
           </Box>
-        </Box>
-        {/* Sembunyikan chart jika error, tampilkan tabel OHLCV */}
-        {ohlcvError || !ohlcv || ohlcv.length === 0 ? (
-          <>
-            <Typography variant="body2" color="text.secondary">Chart not available. Displaying OHLCV data as table.</Typography>
-            <div style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-              <table style={{ 
-                fontSize: window.innerWidth < 600 ? 11 : 13, 
-                minWidth: 500, width: '100%', borderCollapse: 'collapse', marginTop: 8, background: darkMode ? '#23272b' : '#fff', color: darkMode ? '#fff' : undefined }}>
-                <thead>
-                  <tr style={{ background: darkMode ? '#333b44' : '#f5f5f5', color: darkMode ? '#fff' : undefined }}>
-                    <th style={{ 
-                      border: '1px solid #ddd', 
-                      padding: 4, 
-                      background: darkMode ? '#333b44' : '#1976d2',
-                      color: '#fff',
-                      fontWeight: 'bold',
-                      fontSize: 15,
-                      textAlign: 'center',
-                      letterSpacing: 1
-                    }}>Time (epoch UTC)</th>
-                    <th style={{ 
-                      border: '1px solid #ddd', 
-                      padding: 4, 
-                      background: darkMode ? '#333b44' : '#1976d2',
-                      color: '#fff',
-                      fontWeight: 'bold',
-                      fontSize: 15,
-                      textAlign: 'center',
-                      letterSpacing: 1
-                    }}>Open</th>
-                    <th style={{ 
-                      border: '1px solid #ddd', 
-                      padding: 4, 
-                      background: darkMode ? '#333b44' : '#1976d2',
-                      color: '#fff',
-                      fontWeight: 'bold',
-                      fontSize: 15,
-                      textAlign: 'center',
-                      letterSpacing: 1
-                    }}>High</th>
-                    <th style={{ 
-                      border: '1px solid #ddd', 
-                      padding: 4, 
-                      background: darkMode ? '#333b44' : '#1976d2',
-                      color: '#fff',
-                      fontWeight: 'bold',
-                      fontSize: 15,
-                      textAlign: 'center',
-                      letterSpacing: 1
-                    }}>Low</th>
-                    <th style={{ 
-                      border: '1px solid #ddd', 
-                      padding: 4,
-                      background: darkMode ? '#333b44' : '#1976d2',
-                      color: '#fff',
-                      fontWeight: 'bold',
-                      fontSize: 15,
-                      textAlign: 'center',
-                      letterSpacing: 1
-                    }}>Close</th>
-                    <th style={{ 
-                      border: '1px solid #ddd', 
-                      padding: 4, 
-                      background: darkMode ? '#333b44' : '#1976d2',
-                      color: '#fff',
-                      fontWeight: 'bold',
-                      fontSize: 15,
-                      textAlign: 'center',
-                      letterSpacing: 1
-                    }}>Volume</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(ohlcv || []).slice(-(barCount || 30)).reverse().map((d, i) => (
-                    <tr key={i}>
-                      <td style={{ border: '1px solid #ddd', padding: 4 }}>{d.time}</td>
-                      <td style={{ border: '1px solid #ddd', padding: 4 }}>{d.open}</td>
-                      <td style={{ border: '1px solid #ddd', padding: 4 }}>{d.high}</td>
-                      <td style={{ border: '1px solid #ddd', padding: 4 }}>{d.low}</td>
-                      <td style={{ border: '1px solid #ddd', padding: 4 }}>{d.close}</td>
-                      <td style={{ border: '1px solid #ddd', padding: 4 }}>{d.tick_volume ?? d.volume ?? d.real_volume ?? '-'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        ) : (
-          (chartMode === 'candlestick' ? (
-            <CandlestickChart 
-              ohlcv={ohlcv} 
-              jumlahBar={barCount} 
+
+          {positionsLoading ? (
+            <Box sx={{ py: 2, display: "flex", justifyContent: "center" }}>
+              <CircularProgress size={22} />
+            </Box>
+          ) : openPositions.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">Tidak ada trade aktif di backend.</Typography>
+          ) : (
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Type</TableCell>
+                    <TableCell>Symbol</TableCell>
+                    <TableCell>Lot</TableCell>
+                    <TableCell>Entry</TableCell>
+                    <TableCell>Current</TableCell>
+                    <TableCell>Floating</TableCell>
+                    <TableCell>TP</TableCell>
+                    <TableCell>SL</TableCell>
+                    <TableCell>Broker</TableCell>
+                    <TableCell>Exec</TableCell>
+                    <TableCell align="right">Action</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {openPositions.map((trade, index) => {
+                    const id = String(trade.trade_id);
+                    const draft = tpSlDrafts[id] || { tpValue: trade.tpValue ?? "", slValue: trade.slValue ?? "" };
+                    const rowLoading = !!tradeActionLoading[id];
+                    const floating = calcTradeFloatingPnl(trade, lastPrice);
+                    return (
+                      <TableRow key={id}>
+                        <TableCell>{String(trade.type || "-").toUpperCase()}</TableCell>
+                        <TableCell>{trade.symbol || "-"}</TableCell>
+                        <TableCell>{trade.lot ?? "-"}</TableCell>
+                        <TableCell>{trade.entry ?? "-"}</TableCell>
+                        <TableCell>{lastPrice ?? "-"}</TableCell>
+                        <TableCell sx={{ color: floating < 0 ? "error.main" : "success.main", fontWeight: 700 }}>
+                          {Number(floating).toFixed(2)}
+                        </TableCell>
+                        <TableCell sx={{ minWidth: 110 }}>
+                          <TextField
+                            size="small"
+                            type="number"
+                            value={draft.tpValue}
+                            onChange={(e) => setTpSlDrafts((prev) => ({ ...prev, [id]: { ...draft, tpValue: e.target.value } }))}
+                            inputProps={{ step: 0.1 }}
+                          />
+                        </TableCell>
+                        <TableCell sx={{ minWidth: 110 }}>
+                          <TextField
+                            size="small"
+                            type="number"
+                            value={draft.slValue}
+                            onChange={(e) => setTpSlDrafts((prev) => ({ ...prev, [id]: { ...draft, slValue: e.target.value } }))}
+                            inputProps={{ step: 0.1 }}
+                          />
+                        </TableCell>
+                        <TableCell>{trade.broker_name || "-"}</TableCell>
+                        <TableCell>{trade.execution_mode || "-"}</TableCell>
+                        <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+                          <Button size="small" variant="outlined" sx={{ mr: 1 }} disabled={rowLoading} onClick={() => handleSaveTradeTPSL(id)}>
+                            Save TP/SL
+                          </Button>
+                          <Button size="small" color="error" variant="contained" disabled={rowLoading} onClick={() => handleCloseTrade(trade, index)}>
+                            Close
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </Paper>
+
+        <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 2, overflowX: "auto", width: "100%" }}>
+          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 1 }}>
+            <Typography variant="h6">Chart</Typography>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+              <Button size="small" variant={chartMode === "candlestick" ? "contained" : "outlined"} onClick={() => setChartMode("candlestick")}>
+                Candlestick
+              </Button>
+              <Button size="small" variant={chartMode === "line" ? "contained" : "outlined"} onClick={() => setChartMode("line")}>
+                Line
+              </Button>
+            </Box>
+          </Box>
+
+          {ohlcvError || !ohlcv || ohlcv.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">Chart not available.</Typography>
+          ) : chartMode === "candlestick" ? (
+            <CandlestickChart
+              ohlcv={ohlcv}
+              jumlahBar={barCount}
               spread={(() => {
-                if (ohlcv && ohlcv.length > 0) {
-                  const last = ohlcv[ohlcv.length - 1];
-                  if (last.ask !== undefined && last.bid !== undefined) {
-                    return Math.abs(last.ask - last.bid);
-                  }
-                  // fallback: default 2.0 (misal 2 pip)
-                  return 2.0;
-                }
+                const last = ohlcv[ohlcv.length - 1];
+                if (last && last.ask !== undefined && last.bid !== undefined) return Math.abs(last.ask - last.bid);
                 return 2.0;
               })()}
             />
           ) : (
             <LineChart ohlcv={ohlcv} />
-          ))
-        )}
-      </Paper>
-      <Paper sx={{ p: { xs: 1, sm: 2 }, overflowX: 'auto', width: '100%' }}>
-        <Typography variant="h6">Indicators (M1, M5, M15, M30)</Typography>
-        <Typography variant="body2" sx={{ mb: 1, color: darkMode ? '#90caf9' : '#1976d2', fontWeight: 500 }}>
-          Settings: RSI (10), MACD (12,26,9), BB (20,2), SMA (20), Stoch (14,3,3)
-        </Typography>
-        <div style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-        <table style={{ fontSize: window.innerWidth < 600 ? 11 : 13, minWidth: 700, width: '100%', borderCollapse: 'collapse', marginTop: 8, background: darkMode ? '#23272b' : '#fff', color: darkMode ? '#fff' : undefined }}>
-          <thead>
-            <tr style={{ background: darkMode ? '#333b44' : '#f5f5f5', color: darkMode ? '#fff' : undefined }}>
-              <th style={{ 
-                border: '1px solid #ddd', 
-                padding: 4, 
-                background: darkMode ? '#333b44' : '#1976d2',
-                color: '#fff',
-                fontWeight: 'bold',
-                fontSize: 15,
-                textAlign: 'center',
-                letterSpacing: 1
-              }}>TF</th>
-              <th style={{ 
-                border: '1px solid #ddd', 
-                padding: 4, 
-                background: darkMode ? '#333b44' : '#1976d2',
-                color: '#fff',
-                fontWeight: 'bold',
-                fontSize: 15,
-                textAlign: 'center',
-                letterSpacing: 1
-              }} title="Relative Strength Index">RSI</th>
-              <th style={{ 
-                border: '1px solid #ddd', 
-                padding: 4, 
-                background: darkMode ? '#333b44' : '#1976d2',
-                color: '#fff',
-                fontWeight: 'bold',
-                fontSize: 15,
-                textAlign: 'center',
-                letterSpacing: 1
-              }} title="Moving Average Convergence Divergence">MACD</th>
-              <th style={{ 
-                border: '1px solid #ddd', 
-                padding: 4, 
-                background: darkMode ? '#333b44' : '#1976d2',
-                color: '#fff',
-                fontWeight: 'bold',
-                fontSize: 15,
-                textAlign: 'center',
-                letterSpacing: 1
-              }} title="MACD Signal Line">MACD Sig</th>
-              <th style={{ 
-                border: '1px solid #ddd', 
-                padding: 4, 
-                background: darkMode ? '#333b44' : '#1976d2',
-                color: '#fff',
-                fontWeight: 'bold',
-                fontSize: 15,
-                textAlign: 'center',
-                letterSpacing: 1
-              }} title="Bollinger Bands Lower">BB Lower</th>
-              <th style={{ 
-                border: '1px solid #ddd', 
-                padding: 4, 
-                background: darkMode ? '#333b44' : '#1976d2',
-                color: '#fff',
-                fontWeight: 'bold',
-                fontSize: 15,
-                textAlign: 'center',
-                letterSpacing: 1
-              }} title="Bollinger Bands Middle">BB Mid</th>
-              <th style={{ 
-                border: '1px solid #ddd', 
-                padding: 4, 
-                background: darkMode ? '#333b44' : '#1976d2',
-                color: '#fff',
-                fontWeight: 'bold',
-                fontSize: 15,
-                textAlign: 'center',
-                letterSpacing: 1
-              }} title="Bollinger Bands Upper">BB Upper</th>
-              <th style={{ 
-                border: '1px solid #ddd', 
-                padding: 4, 
-                background: darkMode ? '#333b44' : '#1976d2',
-                color: '#fff',
-                fontWeight: 'bold',
-                fontSize: 15,
-                textAlign: 'center',
-                letterSpacing: 1
-              }} title="Simple Moving Average">SMA</th>
-              <th style={{ 
-                border: '1px solid #ddd', 
-                padding: 4, 
-                background: darkMode ? '#333b44' : '#1976d2',
-                color: '#fff',
-                fontWeight: 'bold',
-                fontSize: 15,
-                textAlign: 'center',
-                letterSpacing: 1
-              }} title="Stochastic Oscillator K">Stoch K</th>
-              <th style={{ 
-                border: '1px solid #ddd', 
-                padding: 4, 
-                background: darkMode ? '#333b44' : '#1976d2',
-                color: '#fff',
-                fontWeight: 'bold',
-                fontSize: 15,
-                textAlign: 'center',
-                letterSpacing: 1
-              }} title="Stochastic Oscillator D">Stoch D</th>
-            </tr>
-          </thead>
-          <tbody>
-            {['M1','M5','M15','M30'].map(tf => (
-              indicators && indicators[tf] ? (
-                <tr key={tf} style={
-                  darkMode
-                    ? { background: '#23272b', color: '#fff' }
-                    : { background: '#e3f2fd' }
-                }>
-                  <td style={{ border: '1px solid #444', padding: 4, fontWeight: 'bold', textAlign: 'center', color: darkMode ? '#fff' : undefined }}>{tf}</td>
-                  {['rsi','macd','macd_signal','bb_lower','bb_mid','bb_upper','sma','stoch_k','stoch_d'].map((key) => {
-                    const val = indicators[tf][key];
-                    const prev = prevIndicators[tf]?.[key];
-                    let arrow = null;
-                    if (prev !== undefined && val !== undefined) {
-                      if (val > prev) arrow = <span style={{color:'#43e97b', fontWeight:'bold', marginLeft:4}}>&#9650;</span>; // hijau naik
-                      else if (val < prev) arrow = <span style={{color:'#ef5350', fontWeight:'bold', marginLeft:4}}>&#9660;</span>; // merah turun
-                    }
-                    return (
-                      <td key={key} style={{ border: '1px solid #444', padding: 4, textAlign: 'right', color: val < 0 ? '#ef5350' : (darkMode ? '#fff' : undefined), background: darkMode ? '#23272b' : undefined, verticalAlign:'middle' }}>
-                        <span>{val?.toFixed(2)}</span>{arrow}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ) : null
-            ))}
-          </tbody>
-        </table>
-        </div>
-        <button style={{marginTop:12, float:'right'}} onClick={() => exportIndicatorsToCSV(indicators)}>Export CSV</button>
-      </Paper>
-      {/* Trading Strategy Table */}
-      <Paper sx={{ p: { xs: 1, sm: 2 }, mt: 2, mb: 2, overflowX: 'auto', width: '100%' }}>
-        <Typography variant="h6" sx={{ mb: 1 }}>Trading Strategy Reference</Typography>
-        <div style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-        <table style={{ fontSize: window.innerWidth < 600 ? 11 : 13, minWidth: 900, width: '100%', borderCollapse: 'collapse', background: darkMode ? '#23272b' : '#fff', color: darkMode ? '#fff' : undefined }}>
-          <thead>
-            <tr style={{ background: darkMode ? '#333b44' : '#e3f2fd', color: darkMode ? '#fff' : '#333', fontWeight: 'bold', fontSize: 14 }}>
-              <th style={{ border: '1px solid #bbb', padding: 4 }}>Strategi</th>
-              <th style={{ border: '1px solid #bbb', padding: 4 }}>RSI</th>
-              <th style={{ border: '1px solid #bbb', padding: 4 }}>MACD</th>
-              <th style={{ border: '1px solid #bbb', padding: 4 }}>Stochastic</th>
-              <th style={{ border: '1px solid #bbb', padding: 4 }}>MA (Moving Average)</th>
-              <th style={{ border: '1px solid #bbb', padding: 4 }}>Volume</th>
-              <th style={{ border: '1px solid #bbb', padding: 4 }}>Kapan Open Trade</th>
-              <th style={{ border: '1px solid #bbb', padding: 4 }}>TF Utama</th>
-              <th style={{ border: '1px solid #bbb', padding: 4 }}>TF Konfirmasi</th>
-              <th style={{ border: '1px solid #bbb', padding: 4 }}>TF Besar</th>
-              <th style={{ border: '1px solid #bbb', padding: 4 }}>Catatan Penting</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td style={{ border: '1px solid #bbb', padding: 4, fontWeight: 'bold' }}>Santai – Long Term</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Period 14, level 30/70</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>12-26-9, lihat tren jangka panjang</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>14,3,3 (lebih lambat)</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>MA 50 & MA 200 (golden cross/death cross)</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Konfirmasi tren besar</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Entry saat tren jelas (cross MA, MACD searah, RSI &gt;50 atau &lt;50)</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>H4 – D1</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>W1</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>MN</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Cocok untuk swing/position trader, tahan beberapa hari/minggu. Gunakan MA 50/200 dan MACD untuk arah tren besar.</td>
-            </tr>
-            <tr>
-              <td style={{ border: '1px solid #bbb', padding: 4, fontWeight: 'bold' }}>Santai – Scalp</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Period 14, level 20/80</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>12-26-9, gunakan histogram kecil</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>5,3,3 (lebih sensitif)</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>MA 20 (BB middle line)</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Volume stabil</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Entry di pantulan BB + RSI/Stoch ekstrem</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>M5 – M15</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>H1</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>H4</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Target kecil (5–15 pips), hindari news high impact. Entry di pantulan BB + RSI/Stoch ekstrem. Hindari melawan tren H1.</td>
-            </tr>
-            <tr>
-              <td style={{ border: '1px solid #bbb', padding: 4, fontWeight: 'bold' }}>Agresif – Long Term</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Period 7, level 20/80</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>8-17-9, lebih cepat</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>5,3,3</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>MA 100 + MA 200</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Volume besar (breakout)</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Entry saat breakout dengan konfirmasi volume</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>H1 – H4</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>D1</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>W1</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Risiko tinggi, bisa profit besar tapi rawan false breakout. Fokus pada breakout besar dengan volume tinggi. Konfirmasi MACD dan RSI di D1.</td>
-            </tr>
-            <tr>
-              <td style={{ border: '1px solid #bbb', padding: 4, fontWeight: 'bold' }}>Agresif – Scalp</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Period 7, level 20/80</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>5-13-9, sangat cepat</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>3,1,1 (super sensitif)</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>MA 10 + MA 20</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Volume spike</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Entry cepat di crossing Stoch + MACD + candle momentum</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>M1 – M5</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>M15 – H1</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>H4</td>
-              <td style={{ border: '1px solid #bbb', padding: 4 }}>Sangat berisiko, cocok hanya untuk trader berpengalaman dengan eksekusi cepat. Entry cepat di momentum candle. Pastikan arah H1 tidak berlawanan agar tidak terseret reversal.</td>
-            </tr>
-          </tbody>
-        </table>
-        </div>
-      </Paper>
-      <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 2, background: darkMode ? '#23272b' : '#f5f5f5', borderRadius: 2 }}>
-        {/* Footnote: Trading open/close info for user */}
-        <Box sx={{ mt: 3, mb: 2, p: 2, background: darkMode ? '#23272b' : '#f5f5f5', borderRadius: 2, fontSize: 13, color: darkMode ? '#fff' : '#333' }}>
-        <Alert severity="info" sx={{ mb: 2 }}>
-          <b>Note:</b> Open trade signals will be sent in both <b>scalp</b> and <b>normal</b> modes when indicator conditions are met.<br/>
-          <ul style={{margin: '4px 0 0 18px', fontSize: 13}}>
-            <li><b>Normal mode:</b> Example: RSI &lt; 40 and MACD &lt; 0 for sell, or RSI &gt; 60 and MACD &gt; 0 for buy.</li>
-            <li><b>Scalp mode:</b> Example: Stochastic K &gt; 80 for sell, or Stochastic K &lt; 20 for buy, with fast signal changes.</li>
-          </ul>
-          The actual logic may be adjusted in the backend simulation engine.
-        </Alert>
-        </Box>
-      </Paper>
+          )}
+        </Paper>
+
+        <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 2, overflowX: "auto", width: "100%" }}>
+          <Typography variant="h6">Informasi Setting Indikator</Typography>
+          <Typography variant="body2" sx={{ mb: 1, color: darkMode ? "#90caf9" : "#1976d2", fontWeight: 500 }}>
+            Referensi default: RSI (14), MACD (12,26,9), Bollinger Bands (20,2), SMA (20), Stochastic (14,3,3)
+          </Typography>
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>TF</TableCell>
+                  <TableCell align="right">RSI</TableCell>
+                  <TableCell align="right">MACD</TableCell>
+                  <TableCell align="right">MACD Sig</TableCell>
+                  <TableCell align="right">BB Low</TableCell>
+                  <TableCell align="right">BB Mid</TableCell>
+                  <TableCell align="right">BB Up</TableCell>
+                  <TableCell align="right">SMA</TableCell>
+                  <TableCell align="right">Stoch K</TableCell>
+                  <TableCell align="right">Stoch D</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {["M1", "M5", "M15", "M30"].map((timeframe) => {
+                  const row = indicators?.[timeframe];
+                  return (
+                    <TableRow key={timeframe}>
+                      <TableCell sx={{ fontWeight: 700 }}>{timeframe}</TableCell>
+                      <TableCell align="right">{row?.rsi?.toFixed?.(2) ?? "-"}</TableCell>
+                      <TableCell align="right">{row?.macd?.toFixed?.(2) ?? "-"}</TableCell>
+                      <TableCell align="right">{row?.macd_signal?.toFixed?.(2) ?? "-"}</TableCell>
+                      <TableCell align="right">{row?.bb_lower?.toFixed?.(2) ?? "-"}</TableCell>
+                      <TableCell align="right">{row?.bb_mid?.toFixed?.(2) ?? "-"}</TableCell>
+                      <TableCell align="right">{row?.bb_upper?.toFixed?.(2) ?? "-"}</TableCell>
+                      <TableCell align="right">{row?.sma?.toFixed?.(2) ?? "-"}</TableCell>
+                      <TableCell align="right">{row?.stoch_k?.toFixed?.(2) ?? "-"}</TableCell>
+                      <TableCell align="right">{row?.stoch_d?.toFixed?.(2) ?? "-"}</TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Paper>
+
+        <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 2, overflowX: "auto", width: "100%" }}>
+          <Typography variant="h6" sx={{ mb: 1 }}>Referensi Preferensi Trade Mode</Typography>
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Profil</TableCell>
+                  <TableCell>Trade Mode</TableCell>
+                  <TableCell>TF Utama</TableCell>
+                  <TableCell>Konfirmasi</TableCell>
+                  <TableCell>Preferensi Setting</TableCell>
+                  <TableCell>Catatan</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                <TableRow>
+                  <TableCell>Santai</TableCell>
+                  <TableCell>Normal</TableCell>
+                  <TableCell>M15 - H1</TableCell>
+                  <TableCell>H4</TableCell>
+                  <TableCell>RSI 14, MACD 12/26/9, Stoch 14/3/3</TableCell>
+                  <TableCell>Fokus tren lebih stabil, sinyal lebih sedikit.</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Santai</TableCell>
+                  <TableCell>Scalp</TableCell>
+                  <TableCell>M5 - M15</TableCell>
+                  <TableCell>H1</TableCell>
+                  <TableCell>RSI 14, BB 20/2, Stoch 5/3/3</TableCell>
+                  <TableCell>Target kecil, hindari high-impact news.</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Agresif</TableCell>
+                  <TableCell>Normal</TableCell>
+                  <TableCell>M5 - M15</TableCell>
+                  <TableCell>H1</TableCell>
+                  <TableCell>RSI 7-10, MACD cepat, MA 20</TableCell>
+                  <TableCell>Lebih responsif, false signal lebih tinggi.</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Agresif</TableCell>
+                  <TableCell>Scalp</TableCell>
+                  <TableCell>M1 - M5</TableCell>
+                  <TableCell>M15</TableCell>
+                  <TableCell>Stoch 3/1/1, MACD 5/13/9, MA 10/20</TableCell>
+                  <TableCell>Butuh eksekusi cepat dan disiplin risk management.</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </TableContainer>
+          <Alert severity="info" sx={{ mt: 1.5 }}>
+            Panel ini bersifat referensi visual preferensi setup indikator. Eksekusi sinyal final tetap mengikuti logic backend.
+          </Alert>
+        </Paper>
       </Box>
     </ThemeProvider>
-    </>
   );
 }
