@@ -81,10 +81,10 @@ function getSignalColor(signal) {
   return "#424242";
 }
 
-export default function App() {
+export default function App( { darkMode, setDarkMode }) {
   const [engine, setEngine] = useState("mt5");
   const [tradeMode, setTradeMode] = useState("scalp");
-  const [darkMode, setDarkMode] = useState(false);
+  // const [darkMode, setDarkMode] = useState(false);
 
   const [symbol, setSymbol] = useState("XAUUSD");
   const [tf, setTf] = useState("M1");
@@ -143,6 +143,10 @@ export default function App() {
       mode: darkMode ? "dark" : "light",
       primary: { main: "#1976d2" },
       secondary: { main: "#43e97b" },
+      background: {
+        default: darkMode ? "#121212" : "#fafafa",
+        paper: darkMode ? "#1e1e1e" : "#fff",
+      },
     },
     typography: {
       fontSize: 13,
@@ -287,22 +291,29 @@ export default function App() {
   };
 
   useEffect(() => {
+    let inFlight = false;
     refreshAccountState();
     refreshOpenCount();
     refreshOpenPositions();
     refreshBrokers();
     const timer = setInterval(() => {
+      if (inFlight) return;
+      inFlight = true;
       refreshAccountState();
       refreshOpenCount();
       refreshOpenPositions();
-    }, 2000);
-    return () => clearInterval(timer);
+      inFlight = false;
+    }, 5000);
+    return () => {
+      clearInterval(timer);
+      inFlight = false;
+    };
   }, []);
 
   useEffect(() => {
     const timer = setInterval(() => {
       refreshBrokers();
-    }, 10000);
+    }, 30000);
     return () => clearInterval(timer);
   }, []);
 
@@ -326,7 +337,10 @@ export default function App() {
 
   useEffect(() => {
     const baseUrl = getBackendUrl(engine, "http");
+    let inFlight = false;
     const fetchSignal = () => {
+      if (inFlight) return;
+      inFlight = true;
       fetch(`${baseUrl}/signal?symbol=${symbol}&mode=${tradeMode}`)
         .then((res) => res.json())
         .then((data) => {
@@ -341,16 +355,25 @@ export default function App() {
           setSignal(data.signal || "wait");
           setIndicators(data.indicators || {});
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => {
+          inFlight = false;
+        });
     };
     fetchSignal();
-    const timer = setInterval(fetchSignal, 1000);
-    return () => clearInterval(timer);
+    const timer = setInterval(fetchSignal, 3000);
+    return () => {
+      clearInterval(timer);
+      inFlight = false;
+    };
   }, [symbol, tradeMode, engine]);
 
   useEffect(() => {
     const baseUrl = getBackendUrl(engine, "http");
+    let inFlight = false;
     const fetchOhlcv = () => {
+      if (inFlight) return;
+      inFlight = true;
       fetch(`${baseUrl}/ohlcv?symbol=${symbol}&timeframe=${tf}&bars=${barCount}`)
         .then((res) => {
           if (!res.ok) throw new Error("Backend not active");
@@ -377,11 +400,17 @@ export default function App() {
           setOhlcv([]);
           setOhlcvError(true);
           setOhlcvWarning("");
+        })
+        .finally(() => {
+          inFlight = false;
         });
     };
     fetchOhlcv();
-    const timer = setInterval(fetchOhlcv, 1000);
-    return () => clearInterval(timer);
+    const timer = setInterval(fetchOhlcv, 5000);
+    return () => {
+      clearInterval(timer);
+      inFlight = false;
+    };
   }, [symbol, tf, barCount, engine]);
 
   useEffect(() => {
@@ -404,12 +433,24 @@ export default function App() {
     brokers[0] ||
     null;
 
+  const selectedBroker = brokers.find((b) => String(b.id) === String(selectedBrokerId)) || activeBroker || null;
+  const selectedBrokerIsMt4 = String(selectedBroker?.platform || "").toLowerCase() === "mt4";
+
   useEffect(() => {
     if (!selectedBrokerId && activeBroker) {
       setSelectedBrokerId(String(activeBroker.id));
-      if (activeBroker.execution_mode) setSelectedOrderMethod(activeBroker.execution_mode);
+      if (activeBroker.execution_mode) {
+        const nextMode = String(activeBroker.platform || "").toLowerCase() === "mt4" ? "mouse" : activeBroker.execution_mode;
+        setSelectedOrderMethod(nextMode);
+      }
     }
   }, [selectedBrokerId, activeBroker]);
+
+  useEffect(() => {
+    if (selectedBrokerIsMt4 && selectedOrderMethod === "direct") {
+      setSelectedOrderMethod("mouse");
+    }
+  }, [selectedBrokerIsMt4, selectedOrderMethod]);
 
   useEffect(() => {
     const brokerId = selectedBrokerId || (activeBroker ? String(activeBroker.id) : "") || (defaultBroker ? String(defaultBroker.id) : "");
@@ -418,19 +459,28 @@ export default function App() {
       return;
     }
 
+    let inFlight = false;
     const fetchBrokerOrderStatus = () => {
+      if (inFlight) return;
+      inFlight = true;
       fetch(`${getBackendUrl("mt5", "http")}/brokers/${brokerId}/order_status?symbol=${symbol}`)
         .then((res) => {
           if (!res.ok) throw new Error("Failed");
           return res.json();
         })
         .then((data) => setBrokerOrderStatus(data))
-        .catch(() => setBrokerOrderStatus({ can_open_order: false, reason: "status_endpoint_unavailable" }));
+        .catch(() => setBrokerOrderStatus({ can_open_order: false, reason: "status_endpoint_unavailable" }))
+        .finally(() => {
+          inFlight = false;
+        });
     };
 
     fetchBrokerOrderStatus();
-    const timer = setInterval(fetchBrokerOrderStatus, 5000);
-    return () => clearInterval(timer);
+    const timer = setInterval(fetchBrokerOrderStatus, 15000);
+    return () => {
+      clearInterval(timer);
+      inFlight = false;
+    };
   }, [selectedBrokerId, activeBroker, defaultBroker, symbol]);
 
   const mapBrokerOrderStatusText = (status) => {
@@ -554,7 +604,10 @@ export default function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Box sx={{ p: { xs: 1, sm: 2 }, maxWidth: 1200, mx: "auto", width: "100%" }}>
+      <Box sx={{ p: { xs: 1, sm: 2 }, maxWidth: 1200, mx: "auto", width: "100%" ,
+                bgcolor: "background.default",
+                minHeight: "100vh", 
+              }}>
         <Snackbar
           open={snackbarOpen}
           autoHideDuration={2500}
@@ -644,7 +697,8 @@ export default function App() {
 
         <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 2, overflowX: "auto", width: "100%" }}>
           <Box sx={{ display: "flex", flexDirection: { xs: "column", md: "row" }, gap: 2 }}>
-            <Box sx={{ flex: 1, minWidth: 0 }}>
+            {/* Panel Signal */}
+            <Box sx={{ flex: 1, minWidth: 0, borderRight: { md: "1px solid #eee" }, borderRadius: 1, border: `2px solid ${signal === "wait" ? "#bdbdbd" : getSignalColor(signal)}`, p: 2,}}>
               <Typography variant="h6" sx={{ fontWeight: "bold", letterSpacing: 2 }}>
                 Signal: <b style={{ color: signal === "buy" ? "#1b5e20" : "#424242" }}>{signal ? signal.toUpperCase() : "-"}</b>
               </Typography>
@@ -667,13 +721,8 @@ export default function App() {
               ) : null}
             </Box>
 
-            <Box
-              sx={{
-                flex: 1,
-                minWidth: 0,
-                borderLeft: { md: "1px solid #eee" },
-                pl: { md: 2, xs: 0 },
-                mt: { xs: 2, md: 0 },
+            {/* Panel Trading */}
+            <Box sx={{ flex: 1, minWidth: 0, borderLeft: { md: "1px solid #eee" }, pl: { md: 2, xs: 0 }, mt: { xs: 2, md: 0 },
                 borderRadius: 1,
                 border: `2px solid ${signal === "wait" ? "#bdbdbd" : getSignalColor(signal)}`,
                 animation: signal === "wait" ? "none" : "tradePanelPulse 1s infinite",
@@ -727,7 +776,10 @@ export default function App() {
                       const nextId = e.target.value;
                       setSelectedBrokerId(nextId);
                       const broker = brokers.find((b) => String(b.id) === String(nextId));
-                      if (broker?.execution_mode) setSelectedOrderMethod(broker.execution_mode);
+                      if (broker?.execution_mode) {
+                        const nextMode = String(broker.platform || "").toLowerCase() === "mt4" ? "mouse" : broker.execution_mode;
+                        setSelectedOrderMethod(nextMode);
+                      }
                     }}
                   >
                     {brokers.map((b) => (
@@ -746,7 +798,7 @@ export default function App() {
                     onChange={(e) => setSelectedOrderMethod(e.target.value)}
                   >
                     <MenuItem value="mouse">mouse</MenuItem>
-                    <MenuItem value="direct">direct</MenuItem>
+                    {!selectedBrokerIsMt4 ? <MenuItem value="direct">direct</MenuItem> : null}
                   </Select>
                 </FormControl>
                 <TextField

@@ -23,7 +23,7 @@ from .db import (
     create_trade_open_record,
     update_broker,
 )
-from .terminal_adapters import get_broker_adapter, probe_broker_order_status
+from .terminal_adapters import get_broker_adapter, get_broker_order_status_snapshot, probe_broker_order_status
 
 router = APIRouter(tags=["brokers"])
 
@@ -79,13 +79,16 @@ def get_broker_order_status(broker_id: int, symbol: str = "XAUUSD"):
     broker = get_broker(broker_id)
     if not broker:
         raise HTTPException(status_code=404, detail="Broker not found")
-    return probe_broker_order_status(broker, symbol=symbol, auto_start=False)
+    return get_broker_order_status_snapshot(broker, symbol=symbol)
 
 
 @router.post("/brokers")
 def add_broker(payload: BrokerCreateRequest):
     try:
-        broker = create_broker(payload.model_dump())
+        data = payload.model_dump()
+        if data.get("platform") == "mt4" and data.get("execution_mode") == "direct":
+            data["execution_mode"] = "mouse"
+        broker = create_broker(data)
         return {"status": "ok", "broker": broker}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -93,7 +96,17 @@ def add_broker(payload: BrokerCreateRequest):
 
 @router.put("/brokers/{broker_id}")
 def edit_broker(broker_id: int, payload: BrokerUpdateRequest):
-    broker = update_broker(broker_id, payload.model_dump(exclude_unset=True))
+    updates = payload.model_dump(exclude_unset=True)
+    current = get_broker(broker_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Broker not found")
+
+    target_platform = updates.get("platform", current.get("platform"))
+    target_mode = updates.get("execution_mode", current.get("execution_mode"))
+    if target_platform == "mt4" and target_mode == "direct":
+        updates["execution_mode"] = "mouse"
+
+    broker = update_broker(broker_id, updates)
     if not broker:
         raise HTTPException(status_code=404, detail="Broker not found")
     return {"status": "ok", "broker": broker}
@@ -137,12 +150,7 @@ def open_trade_v2(payload: TradeOpenRequest):
     method = payload.order_method or broker.get("execution_mode", "mouse")
 
     if broker.get("platform") == "mt4" and method == "direct":
-        # Keep explicit behavior: MT4 direct is not supported by MetaTrader5 Python bridge.
-        return {
-            "status": "error",
-            "message": "MT4 direct interface tidak tersedia via MetaTrader5 package. Gunakan mode mouse untuk broker MT4.",
-            "broker": broker,
-        }
+        method = "mouse"
 
     try:
         adapter, method = get_broker_adapter(broker, method)

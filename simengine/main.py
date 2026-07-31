@@ -50,13 +50,13 @@ from datetime import datetime, timedelta
 app = FastAPI()
 
 # Allow CORS for all origins (for frontend testing)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+#app.add_middleware(
+#    CORSMiddleware,
+#    allow_origins=["*"],
+#    allow_credentials=True,
+#    allow_methods=["*"],
+#    allow_headers=["*"],
+#)
 
 @app.get("/ohlcv")
 def get_ohlcv(symbol: str = "XAUUSD", timeframe: str = "M1", bars: int = 100, start_time: int = None, interval_sec: int = 60):

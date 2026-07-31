@@ -569,6 +569,13 @@ def clear_mt5_error_log():
         conn.execute("DELETE FROM mt5_error_log")
 
 
+def _normalize_broker_execution_mode(platform, execution_mode):
+    if str(platform or "").lower() == "mt4":
+        return "mouse"
+    mode = str(execution_mode or "mouse").lower()
+    return "direct" if mode == "direct" else "mouse"
+
+
 def list_brokers(include_inactive=False):
     with get_db() as conn:
         if include_inactive:
@@ -596,7 +603,7 @@ def list_brokers(include_inactive=False):
                 "name": row["name"],
                 "platform": row["platform"],
                 "terminal_path": row["terminal_path"],
-                "execution_mode": row["execution_mode"],
+                "execution_mode": _normalize_broker_execution_mode(row["platform"], row["execution_mode"]),
                 "window_hint": row["window_hint"],
                 "is_default": bool(row["is_default"]),
                 "is_active": bool(row["is_active"]),
@@ -625,7 +632,7 @@ def get_broker(broker_id):
             "name": row["name"],
             "platform": row["platform"],
             "terminal_path": row["terminal_path"],
-            "execution_mode": row["execution_mode"],
+            "execution_mode": _normalize_broker_execution_mode(row["platform"], row["execution_mode"]),
             "window_hint": row["window_hint"],
             "is_default": bool(row["is_default"]),
             "is_active": bool(row["is_active"]),
@@ -691,6 +698,8 @@ def resolve_feed_broker(state=None, require_terminal_path=False):
 
 def create_broker(payload):
     now = int(time.time())
+    platform = payload.get("platform", "mt5")
+    execution_mode = _normalize_broker_execution_mode(platform, payload.get("execution_mode", "mouse"))
     with get_db() as conn:
         conn.execute(
             """
@@ -702,9 +711,9 @@ def create_broker(payload):
             """,
             (
                 payload["name"],
-                payload.get("platform", "mt5"),
+                platform,
                 payload.get("terminal_path"),
-                payload.get("execution_mode", "mouse"),
+                execution_mode,
                 payload.get("window_hint"),
                 now,
                 now,
@@ -727,6 +736,7 @@ def update_broker(broker_id, payload):
         "is_active": int(bool(payload.get("is_active", current["is_active"]))),
         "updated_at": int(time.time()),
     }
+    updated["execution_mode"] = _normalize_broker_execution_mode(updated["platform"], updated["execution_mode"])
     with get_db() as conn:
         conn.execute(
             """

@@ -1,9 +1,30 @@
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, Request, WebSocketDisconnect
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from .signal_ws import signal_stream
-from .sim_engine import start_simulation_thread
+#from .sim_engine import start_simulation_thread
 from .auto_trader import start_auto_trader_thread
 app = FastAPI()
+
+
+# Allow CORS for the deployed frontend and local development.
+# CORS not needed if nginx is used as a reverse proxy and handles CORS.
+
+#app.add_middleware(
+#    CORSMiddleware,
+#    allow_origins=["https://trading.almalikiy.net"],  # Allow all origins for development; restrict in production
+#    allow_credentials=True,
+#    allow_methods=["*"],
+#    allow_headers=["*"], 
+#)
+
+#class LogHeadersMiddleware(BaseHTTPMiddleware):
+#    async def dispatch(self, request: Request, call_next):
+#        response = await call_next(request)
+#        print("Response headers:", dict(response.headers))
+#        return response
+#
+#app.add_middleware(LogHeadersMiddleware)
 
 # To run the app, use the following command:
 #
@@ -41,15 +62,17 @@ app.include_router(broker_router)
 @app.on_event("startup")
 def startup_event():
     init_db()
-    start_simulation_thread()
-    start_auto_trader_thread()
+    #start_simulation_thread()
+    #start_auto_trader_thread()
 
 @app.get("/")
 def root():
     return {"message": "Trading Signal API"}
 
+@app.options("/account/state")
+async def options_state():
+    return {"message": "preflight"}
 
-from fastapi import WebSocketDisconnect
 
 @app.websocket("/ws/signal")
 async def ws_signal(websocket: WebSocket):

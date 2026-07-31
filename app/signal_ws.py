@@ -4,7 +4,6 @@ from .logic import get_signal_snapshot
 import asyncio
 from . import config
 from .db import get_account_state, resolve_feed_broker
-from .terminal_adapters import ensure_terminal_running
 
 SYMBOL = "XAUUSD"  # default, bisa diubah via API nanti
 
@@ -17,8 +16,6 @@ async def signal_stream(websocket: WebSocket):
     if not feed_broker:
         feed_broker = resolve_feed_broker(state=state, require_terminal_path=False)
     terminal_path = feed_broker.get("terminal_path") if feed_broker else None
-    if terminal_path:
-        ensure_terminal_running(terminal_path)
     try:
         while True:
             try:

@@ -1,11 +1,19 @@
 import os
 import subprocess
+import threading
 import time
 from typing import Optional
 
 import MetaTrader5 as mt5
 
 from .db import log_mt5_error
+
+
+_PROCESS_PATHS_CACHE = {"data": set(), "expires_at": 0.0}
+_PROCESS_CACHE_LOCK = threading.Lock()
+_BROKER_STATUS_CACHE = {}
+_BROKER_STATUS_REFRESHING = set()
+_BROKER_STATUS_LOCK = threading.Lock()
 
 
 def ensure_terminal_running(terminal_path: Optional[str]):
@@ -24,6 +32,11 @@ def ensure_terminal_running(terminal_path: Optional[str]):
 
 
 def _list_process_paths():
+    now = time.monotonic()
+    with _PROCESS_CACHE_LOCK:
+        if _PROCESS_PATHS_CACHE["expires_at"] > now:
+            return set(_PROCESS_PATHS_CACHE["data"])
+
     try:
         out = subprocess.check_output(
             [
@@ -33,13 +46,17 @@ def _list_process_paths():
                 "Get-CimInstance Win32_Process | Select-Object -ExpandProperty ExecutablePath",
             ],
             text=True,
-            timeout=5,
+            timeout=1,
         )
-        return {
+        paths = {
             os.path.normcase(os.path.abspath(line.strip()))
             for line in out.splitlines()
             if line and line.strip() and os.path.exists(line.strip())
         }
+        with _PROCESS_CACHE_LOCK:
+            _PROCESS_PATHS_CACHE["data"] = paths
+            _PROCESS_PATHS_CACHE["expires_at"] = time.monotonic() + 3.0
+        return paths
     except Exception:
         return set()
 
@@ -268,3 +285,58 @@ def probe_broker_order_status(broker, symbol: str = "XAUUSD", auto_start: bool =
     finally:
         if initialized:
             mt5.shutdown()
+
+
+def get_broker_order_status_snapshot(broker, symbol: str = "XAUUSD"):
+    broker = broker or {}
+    cache_key = (broker.get("id"), symbol)
+
+    def refresh_worker():
+        status = probe_broker_order_status(broker, symbol=symbol, auto_start=False)
+        with _BROKER_STATUS_LOCK:
+            _BROKER_STATUS_CACHE[cache_key] = {
+                "data": status,
+                "updated_at": time.time(),
+            }
+            _BROKER_STATUS_REFRESHING.discard(cache_key)
+
+    with _BROKER_STATUS_LOCK:
+        cached = _BROKER_STATUS_CACHE.get(cache_key)
+        refreshing = cache_key in _BROKER_STATUS_REFRESHING
+
+        if not refreshing:
+            _BROKER_STATUS_REFRESHING.add(cache_key)
+            thread = threading.Thread(target=refresh_worker, daemon=True)
+            thread.start()
+
+    if cached and cached.get("data"):
+        payload = dict(cached["data"])
+        payload["cached"] = True
+        payload["cached_at"] = cached.get("updated_at")
+        return payload
+
+    platform = str(broker.get("platform", "mt5")).lower()
+    if platform != "mt5":
+        return {
+            "broker_id": broker.get("id"),
+            "broker_name": broker.get("name"),
+            "platform": platform,
+            "terminal_path": broker.get("terminal_path"),
+            "can_open_order": True,
+            "reason": "non_mt5_platform",
+            "checks": {"platform_supported": False},
+            "cached": False,
+            "refreshing": True,
+        }
+
+    return {
+        "broker_id": broker.get("id"),
+        "broker_name": broker.get("name"),
+        "platform": platform,
+        "terminal_path": broker.get("terminal_path"),
+        "can_open_order": False,
+        "reason": "status_pending",
+        "checks": {},
+        "cached": False,
+        "refreshing": True,
+    }

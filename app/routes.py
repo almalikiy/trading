@@ -385,8 +385,6 @@ def get_signal(symbol: str = "XAUUSD", mode: str = "real"):
     if not broker:
         broker = resolve_feed_broker(state=state, require_terminal_path=False)
     terminal_path = broker.get("terminal_path") if broker else None
-    if terminal_path:
-        ensure_terminal_running(terminal_path)
     return get_signal_snapshot(symbol, mode=mode, terminal_path=terminal_path)
 
 # Endpoint: OHLCV data for chart
@@ -399,8 +397,6 @@ def get_ohlcv(symbol: str = "XAUUSD", timeframe: str = "M1", bars: int = 100):
         if not broker:
             broker = resolve_feed_broker(state=state, require_terminal_path=False)
         terminal_path = broker.get("terminal_path") if broker else None
-        if terminal_path:
-            ensure_terminal_running(terminal_path)
         result = get_ohlcv_snapshot(symbol, timeframe, bars, terminal_path=terminal_path)
         return result
     except Exception as e:

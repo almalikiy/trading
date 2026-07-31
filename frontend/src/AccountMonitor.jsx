@@ -118,7 +118,7 @@ export default function AccountMonitor() {
   useEffect(() => {
     const timer = setInterval(() => {
       loadBrokers();
-    }, 10000);
+    }, 30000);
     return () => clearInterval(timer);
   }, []);
 
@@ -212,6 +212,7 @@ export default function AccountMonitor() {
     const payload = {
       ...brokerForm,
       name,
+      execution_mode: brokerForm.platform === "mt4" ? "mouse" : brokerForm.execution_mode,
       terminal_path: brokerForm.terminal_path?.trim() || null,
       window_hint: brokerForm.window_hint?.trim() || null,
     };
@@ -267,10 +268,11 @@ export default function AccountMonitor() {
   };
 
   const updateBrokerMode = async (broker, mode) => {
+    const safeMode = String(broker.platform || "").toLowerCase() === "mt4" ? "mouse" : mode;
     await fetch(`${API_BASE}/brokers/${broker.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ execution_mode: mode }),
+      body: JSON.stringify({ execution_mode: safeMode }),
     });
     loadBrokers();
   };
@@ -370,7 +372,14 @@ export default function AccountMonitor() {
               select
               label="Platform"
               value={brokerForm.platform}
-              onChange={(e) => setBrokerForm((s) => ({ ...s, platform: e.target.value }))}
+              onChange={(e) => {
+                const platform = e.target.value;
+                setBrokerForm((s) => ({
+                  ...s,
+                  platform,
+                  execution_mode: platform === "mt4" ? "mouse" : s.execution_mode,
+                }));
+              }}
               size="small"
             >
               <MenuItem value="mt5">MT5</MenuItem>
@@ -387,7 +396,7 @@ export default function AccountMonitor() {
               size="small"
             >
               <MenuItem value="mouse">EA mouse python</MenuItem>
-              <MenuItem value="direct">EA direct interface</MenuItem>
+              {brokerForm.platform !== "mt4" ? <MenuItem value="direct">EA direct interface</MenuItem> : null}
             </TextField>
           </Grid>
           <Grid item xs={12} md={3}>
@@ -443,7 +452,7 @@ export default function AccountMonitor() {
                       onChange={(e) => updateBrokerMode(b, e.target.value)}
                     >
                       <MenuItem value="mouse">mouse</MenuItem>
-                      <MenuItem value="direct">direct</MenuItem>
+                      {String(b.platform || "").toLowerCase() !== "mt4" ? <MenuItem value="direct">direct</MenuItem> : null}
                     </TextField>
                   </TableCell>
                   <TableCell sx={{ maxWidth: 320, wordBreak: "break-all" }}>{b.terminal_path || "-"}</TableCell>

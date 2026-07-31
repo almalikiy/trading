@@ -22,8 +22,14 @@ Aplikasi web untuk memberikan sinyal trading open/buy pada XAUUSD atau simbol la
 1. Pastikan Python 3.10+ dan Node.js terinstal
 2. Install dependensi backend: `pip install -r requirements.txt`
 3. Install dependensi frontend: `cd frontend && npm install`
-4. Jalankan backend: `uvicorn app.main:app --reload`
+4. Jalankan backend: `uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload`
 5. Jalankan frontend: `cd frontend && npm run dev`
+6. Testing backend CORS respons: 
+   curl -i -X OPTIONS http://127.0.0.1:8001/account/state -H "Origin: https://trading.almalikiy.net" -H "Access-Control-Request-Method: GET"
+
+
+## Frontend
+1. Build : 
 
 ## Catatan
 - Pastikan MT5 berjalan dan dapat diakses dari backend
