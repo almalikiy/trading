@@ -14,19 +14,26 @@ import {
   useTheme,
   Divider,
   useMediaQuery,
+  Switch,
+  FormControlLabel,
 } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import HistoryIcon from "@mui/icons-material/History";
 import AccountBalanceWalletIcon from "@mui/icons-material/AccountBalanceWallet";
 
-export function Layout({ children }) {
+export function Layout({ children, darkMode, setDarkMode }) {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-
+  const getTitle = () => {
+    if (location.pathname === "/") return "Trading Signal Dashboard";
+    if (location.pathname === "/history") return "Trade History";
+    if (location.pathname === "/account") return "Account Monitor";
+    return "Trading Dashboard";
+  };
   return (
     <Box sx={{ display: "flex", minHeight: "100vh", bgcolor: theme.palette.background.default }}>
       {/* AppBar di atas */}
@@ -41,8 +48,14 @@ export function Layout({ children }) {
             <MenuIcon />
           </IconButton>
           <Typography variant="h6" sx={{ ml: 1, fontWeight: 700, letterSpacing: 1, flexGrow: 1 }}>
-            <span style={{ color: '#fff', letterSpacing: 2 }}>Trading Dashboard</span>
+            <span style={{ color: '#fff', letterSpacing: 2 }}>{getTitle()}</span>
           </Typography>
+            <FormControlLabel
+              control={<Switch checked={darkMode} onChange={() => setDarkMode((v) => !v)} 
+                  sx={{ color: darkMode ? theme.palette.success.main : theme.palette.warning.main }} 
+                />}
+              label={darkMode ? "Dark Mode" : "Light Mode"}
+            />
         </Toolbar>
       </AppBar>
 

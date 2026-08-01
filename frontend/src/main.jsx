@@ -1,7 +1,7 @@
 
 import React from "react";
 import ReactDOM from "react-dom/client";
-import Layout from "./layout";
+import Layout from "./Layout";
 import { ThemeProvider, createTheme, CssBaseline } from "@mui/material";
 import App from "./App";
 import TradeHistory from "./TradeHistory";
@@ -28,9 +28,9 @@ function Root() {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <BrowserRouter>
-        <Layout>
+        <Layout darkMode={darkMode} setDarkMode={setDarkMode}>
           <Routes>
-            <Route path="/" element={<App darkMode={darkMode} setDarkMode={setDarkMode} />} />
+            <Route path="/" element={<App  />} />
             <Route path="/history" element={<TradeHistory />} />
             <Route path="/account" element={<AccountMonitor />} />
           </Routes>

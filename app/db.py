@@ -136,6 +136,7 @@ def init_db():
                 terminal_path TEXT,
                 execution_mode TEXT NOT NULL DEFAULT 'mouse',
                 window_hint TEXT,
+                default_symbol TEXT NOT NULL DEFAULT 'XAUUSD',
                 is_default INTEGER NOT NULL DEFAULT 0,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at INTEGER NOT NULL,
@@ -143,19 +144,21 @@ def init_db():
             )
             """
         )
+        _add_column_if_missing(conn, "brokers", "default_symbol", "TEXT NOT NULL DEFAULT 'XAUUSD'")
 
         now = int(time.time())
         conn.execute(
             """
             INSERT INTO brokers (
                 name, platform, terminal_path, execution_mode,
-                window_hint, is_default, is_active, created_at, updated_at
+                window_hint, default_symbol, is_default, is_active, created_at, updated_at
             )
-            VALUES (?, 'mt5', NULL, 'mouse', 'FinexBisnisSolusi', 1, 1, ?, ?)
+            VALUES (?, 'mt5', NULL, 'mouse', 'FinexBisnisSolusi', 'XAUUSD', 1, 1, ?, ?)
             ON CONFLICT(name) DO NOTHING
             """,
             ("Default Broker", now, now),
         )
+        conn.execute("UPDATE brokers SET default_symbol = COALESCE(default_symbol, 'XAUUSD') WHERE default_symbol IS NULL OR default_symbol = ''")
 
         cur = conn.execute("SELECT COUNT(*) AS total FROM brokers WHERE is_default = 1")
         if cur.fetchone()["total"] == 0:
@@ -582,7 +585,7 @@ def list_brokers(include_inactive=False):
             rows = conn.execute(
                 """
                 SELECT id, name, platform, terminal_path, execution_mode, window_hint,
-                       is_default, is_active, created_at, updated_at
+                       default_symbol, is_default, is_active, created_at, updated_at
                 FROM brokers
                 ORDER BY is_default DESC, name ASC
                 """
@@ -591,7 +594,7 @@ def list_brokers(include_inactive=False):
             rows = conn.execute(
                 """
                 SELECT id, name, platform, terminal_path, execution_mode, window_hint,
-                       is_default, is_active, created_at, updated_at
+                       default_symbol, is_default, is_active, created_at, updated_at
                 FROM brokers
                 WHERE is_active = 1
                 ORDER BY is_default DESC, name ASC
@@ -605,6 +608,7 @@ def list_brokers(include_inactive=False):
                 "terminal_path": row["terminal_path"],
                 "execution_mode": _normalize_broker_execution_mode(row["platform"], row["execution_mode"]),
                 "window_hint": row["window_hint"],
+                "default_symbol": row["default_symbol"],
                 "is_default": bool(row["is_default"]),
                 "is_active": bool(row["is_active"]),
                 "created_at": row["created_at"],
@@ -619,7 +623,7 @@ def get_broker(broker_id):
         row = conn.execute(
             """
             SELECT id, name, platform, terminal_path, execution_mode, window_hint,
-                   is_default, is_active, created_at, updated_at
+                   default_symbol, is_default, is_active, created_at, updated_at
             FROM brokers
             WHERE id = ?
             """,
@@ -634,6 +638,7 @@ def get_broker(broker_id):
             "terminal_path": row["terminal_path"],
             "execution_mode": _normalize_broker_execution_mode(row["platform"], row["execution_mode"]),
             "window_hint": row["window_hint"],
+            "default_symbol": row["default_symbol"],
             "is_default": bool(row["is_default"]),
             "is_active": bool(row["is_active"]),
             "created_at": row["created_at"],
@@ -704,10 +709,10 @@ def create_broker(payload):
         conn.execute(
             """
             INSERT INTO brokers (
-                name, platform, terminal_path, execution_mode, window_hint,
+                name, platform, terminal_path, execution_mode, window_hint, default_symbol,
                 is_default, is_active, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, 0, 1, ?, ?)
             """,
             (
                 payload["name"],
@@ -715,6 +720,7 @@ def create_broker(payload):
                 payload.get("terminal_path"),
                 execution_mode,
                 payload.get("window_hint"),
+                payload.get("default_symbol") or "XAUUSD",
                 now,
                 now,
             ),
@@ -733,6 +739,7 @@ def update_broker(broker_id, payload):
         "terminal_path": payload.get("terminal_path", current["terminal_path"]),
         "execution_mode": payload.get("execution_mode", current["execution_mode"]),
         "window_hint": payload.get("window_hint", current["window_hint"]),
+        "default_symbol": payload.get("default_symbol", current.get("default_symbol", "XAUUSD")),
         "is_active": int(bool(payload.get("is_active", current["is_active"]))),
         "updated_at": int(time.time()),
     }
@@ -742,7 +749,7 @@ def update_broker(broker_id, payload):
             """
             UPDATE brokers
             SET name = ?, platform = ?, terminal_path = ?, execution_mode = ?,
-                window_hint = ?, is_active = ?, updated_at = ?
+                window_hint = ?, default_symbol = ?, is_active = ?, updated_at = ?
             WHERE id = ?
             """,
             (
@@ -751,6 +758,7 @@ def update_broker(broker_id, payload):
                 updated["terminal_path"],
                 updated["execution_mode"],
                 updated["window_hint"],
+                updated["default_symbol"],
                 updated["is_active"],
                 updated["updated_at"],
                 broker_id,

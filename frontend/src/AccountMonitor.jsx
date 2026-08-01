@@ -37,9 +37,22 @@ export default function AccountMonitor() {
     // Use backend value if available, fallback to localStorage
     const stored = localStorage.getItem('enableMT5');
     return stored === null ? false : stored === 'true';
-  });
+  });  
 
   const [brokers, setBrokers] = useState([]);
+  const [editingBroker, setEditingBroker] = useState(null);
+  const handleEditBroker = (broker) => {
+    setEditingBroker(broker);
+    setBrokerForm({
+      name: broker.name || "",
+      platform: broker.platform || "mt5",
+      execution_mode: broker.execution_mode || "mouse",
+      default_symbol: broker.default_symbol || "",
+      terminal_path: broker.terminal_path || "",
+      window_hint: broker.window_hint || "",
+    });
+  };
+
   const [autoTradeEnabled, setAutoTradeEnabled] = useState(false);
   const [keepTerminalAlive, setKeepTerminalAlive] = useState(true);
   const [dataFeedBrokerId, setDataFeedBrokerId] = useState("");
@@ -215,6 +228,7 @@ export default function AccountMonitor() {
       execution_mode: brokerForm.platform === "mt4" ? "mouse" : brokerForm.execution_mode,
       terminal_path: brokerForm.terminal_path?.trim() || null,
       window_hint: brokerForm.window_hint?.trim() || null,
+      default_symbol: brokerForm.default_symbol?.trim() || null,
     };
 
     setAddingBroker(true);
@@ -248,7 +262,54 @@ export default function AccountMonitor() {
     }
   };
 
-  const setDefaultBroker = async (id) => {
+const saveBroker = async () => {
+  if (!editingBroker) return;
+  const name = brokerForm.name.trim();
+  if (!name) {
+    setSnackbar({ open: true, severity: "warning", message: "Broker name wajib diisi." });
+    return;
+  }
+
+  const payload = {
+    ...brokerForm,
+    name,
+    execution_mode: brokerForm.platform === "mt4" ? "mouse" : brokerForm.execution_mode,
+    terminal_path: brokerForm.terminal_path?.trim() || null,
+    window_hint: brokerForm.window_hint?.trim() || null,
+    default_symbol: brokerForm.default_symbol?.trim() || null,
+  };
+
+  try {
+    const res = await fetch(`${API_BASE}/brokers/${editingBroker.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = data?.detail || "Gagal update broker.";
+      setSnackbar({ open: true, severity: "error", message: String(msg) });
+      return;
+    }
+
+    setEditingBroker(null);
+    setBrokerForm({
+      name: "",
+      platform: "mt5",
+      execution_mode: "mouse",
+      terminal_path: "",
+      default_symbol: "XAUUSD",
+      window_hint: "FinexBisnisSolusi",
+    });
+    await loadBrokers();
+    setSnackbar({ open: true, severity: "success", message: "Broker berhasil diupdate." });
+  } catch (err) {
+    setSnackbar({ open: true, severity: "error", message: "Tidak bisa terhubung ke backend." });
+  }
+};
+
+const setDefaultBroker = async (id) => {
     await fetch(`${API_BASE}/brokers/${id}/set_default`, { method: "POST" });
     loadBrokers();
   };
@@ -399,6 +460,16 @@ export default function AccountMonitor() {
               {brokerForm.platform !== "mt4" ? <MenuItem value="direct">EA direct interface</MenuItem> : null}
             </TextField>
           </Grid>
+          <Grid item xs={12} md={2}>
+            <TextField
+              fullWidth
+              label="Default Symbol"
+              value={brokerForm.default_symbol}
+              onChange={(e) => setBrokerForm((s) => ({ ...s, default_symbol: e.target.value }))}
+              size="small"
+              placeholder="XAUUSD"
+            />
+          </Grid>
           <Grid item xs={12} md={3}>
             <TextField
               fullWidth
@@ -419,8 +490,11 @@ export default function AccountMonitor() {
             />
           </Grid>
           <Grid item xs={12}>
-            <Button variant="contained" onClick={createBroker} disabled={!brokerForm.name.trim() || addingBroker}>
-              {addingBroker ? "Adding..." : "Add Broker"}
+            <Button 
+              variant="contained" 
+              onClick={editingBroker ? saveBroker : createBroker}
+                 disabled={!brokerForm.name.trim() || addingBroker}>
+              {editingBroker ? "Save Broker" : addingBroker ? "Adding..." : "Add Broker"}
             </Button>
           </Grid>
         </Grid>
@@ -432,6 +506,7 @@ export default function AccountMonitor() {
                 <TableCell>Name</TableCell>
                 <TableCell>Platform</TableCell>
                 <TableCell>Execution</TableCell>
+                <TableCell>Symbol</TableCell>
                 <TableCell>Terminal Path</TableCell>
                 <TableCell>Status</TableCell>
                 <TableCell align="right">Actions</TableCell>
@@ -455,11 +530,13 @@ export default function AccountMonitor() {
                       {String(b.platform || "").toLowerCase() !== "mt4" ? <MenuItem value="direct">direct</MenuItem> : null}
                     </TextField>
                   </TableCell>
+                  <TableCell>{b.default_symbol || "-"}</TableCell>
                   <TableCell sx={{ maxWidth: 320, wordBreak: "break-all" }}>{b.terminal_path || "-"}</TableCell>
                   <TableCell>{b.is_active ? "Active" : "Inactive"}</TableCell>
                   <TableCell align="right">
                     <Button size="small" onClick={() => setDefaultBroker(b.id)} disabled={b.is_default}>Default</Button>
                     <Button size="small" onClick={() => toggleBrokerActive(b)}>{b.is_active ? "Disable" : "Enable"}</Button>
+                    <Button size="small" onClick={() => handleEditBroker(b)}>Edit</Button>
                     <Button size="small" color="error" onClick={() => deleteBroker(b.id)}>Delete</Button>
                   </TableCell>
                 </TableRow>

@@ -28,7 +28,7 @@ import {
   TableRow,
   CircularProgress,
 } from "@mui/material";
-import { ThemeProvider, createTheme } from "@mui/material/styles";
+import { ThemeProvider, createTheme, useTheme } from "@mui/material/styles";
 
 const BACKEND_URLS = {
   mt5: {
@@ -138,23 +138,7 @@ export default function App( { darkMode, setDarkMode }) {
   const lastPrice = ohlcv && ohlcv.length > 0 ? Number(ohlcv[ohlcv.length - 1].close) : null;
   const totalFloatingPnl = openPositions.reduce((sum, trade) => sum + calcTradeFloatingPnl(trade, lastPrice), 0);
 
-  const theme = createTheme({
-    palette: {
-      mode: darkMode ? "dark" : "light",
-      primary: { main: "#1976d2" },
-      secondary: { main: "#43e97b" },
-      background: {
-        default: darkMode ? "#121212" : "#fafafa",
-        paper: darkMode ? "#1e1e1e" : "#fff",
-      },
-    },
-    typography: {
-      fontSize: 13,
-      h4: { fontSize: "1.3rem", "@media (max-width:600px)": { fontSize: "1.1rem" } },
-      h6: { fontSize: "1.1rem", "@media (max-width:600px)": { fontSize: "1rem" } },
-      body2: { fontSize: "0.95rem", "@media (max-width:600px)": { fontSize: "0.85rem" } },
-    },
-  });
+  const theme = useTheme();
 
   const refreshAccountState = () => {
     fetch(`${getBackendUrl("mt5", "http")}/account/state`)
@@ -208,6 +192,11 @@ export default function App( { darkMode, setDarkMode }) {
           setDefaultBroker(data);
           setSelectedBrokerId(String(data.id));
           if (data.execution_mode) setSelectedOrderMethod(data.execution_mode);
+     
+          if (data.default_symbol) {
+            setSymbol(data.default_symbol);
+          }
+          
           setBrokers((prev) => {
             const exists = prev.some((b) => String(b.id) === String(data.id));
             return exists ? prev : [data, ...prev];
@@ -222,6 +211,9 @@ export default function App( { darkMode, setDarkMode }) {
             setDefaultBroker(cached);
             setSelectedBrokerId((prev) => prev || String(cached.id));
             if (cached.execution_mode) setSelectedOrderMethod((prev) => prev || cached.execution_mode);
+            if (cached.default_symbol) {
+              setSymbol(cached.default_symbol);
+            }
             setBrokers((prev) => {
               const exists = prev.some((b) => String(b.id) === String(cached.id));
               return exists ? prev : [cached, ...prev];
@@ -443,6 +435,9 @@ export default function App( { darkMode, setDarkMode }) {
         const nextMode = String(activeBroker.platform || "").toLowerCase() === "mt4" ? "mouse" : activeBroker.execution_mode;
         setSelectedOrderMethod(nextMode);
       }
+      if (activeBroker.default_symbol) {
+        setSymbol(activeBroker.default_symbol);
+      }
     }
   }, [selectedBrokerId, activeBroker]);
 
@@ -602,8 +597,6 @@ export default function App( { darkMode, setDarkMode }) {
   };
 
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
       <Box sx={{ p: { xs: 1, sm: 2 }, maxWidth: 1200, mx: "auto", width: "100%" ,
                 bgcolor: "background.default",
                 minHeight: "100vh", 
@@ -636,10 +629,6 @@ export default function App( { darkMode, setDarkMode }) {
                 <MenuItem value="scalp">Scalp</MenuItem>
               </Select>
             </FormControl>
-            <FormControlLabel
-              control={<Switch checked={darkMode} onChange={() => setDarkMode((v) => !v)} color="primary" />}
-              label={darkMode ? "Dark Mode" : "Light Mode"}
-            />
           </Box>
         </Box>
 
@@ -1086,6 +1075,5 @@ export default function App( { darkMode, setDarkMode }) {
           </Alert>
         </Paper>
       </Box>
-    </ThemeProvider>
   );
 }

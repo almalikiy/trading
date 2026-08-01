@@ -31,6 +31,7 @@ router = APIRouter(tags=["brokers"])
 class BrokerCreateRequest(BaseModel):
     name: str = Field(..., min_length=2, max_length=100)
     platform: Literal["mt4", "mt5"] = "mt5"
+    default_symbol: str | None = None 
     terminal_path: Optional[str] = None
     execution_mode: Literal["mouse", "direct"] = "mouse"
     window_hint: Optional[str] = "FinexBisnisSolusi"
@@ -39,6 +40,7 @@ class BrokerCreateRequest(BaseModel):
 class BrokerUpdateRequest(BaseModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=100)
     platform: Optional[Literal["mt4", "mt5"]] = None
+    default_symbol: str | None = None 
     terminal_path: Optional[str] = None
     execution_mode: Optional[Literal["mouse", "direct"]] = None
     window_hint: Optional[str] = None
@@ -105,6 +107,10 @@ def edit_broker(broker_id: int, payload: BrokerUpdateRequest):
     target_mode = updates.get("execution_mode", current.get("execution_mode"))
     if target_platform == "mt4" and target_mode == "direct":
         updates["execution_mode"] = "mouse"
+
+    # Pastikan default_symbol ikut diproses
+    if "default_symbol" in updates:
+        updates["default_symbol"] = updates["default_symbol"].strip() or None
 
     broker = update_broker(broker_id, updates)
     if not broker:
