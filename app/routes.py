@@ -6,7 +6,12 @@ import subprocess
 import os
 from pydantic import BaseModel
 from .broker_routes import TradeOpenRequest, open_trade_v2
-from .terminal_adapters import get_broker_adapter
+from .terminal_adapters import (
+    get_broker_adapter,
+    get_broker_symbol_constraints,
+    normalize_lot_with_constraints,
+    sync_all_terminal_trade_state,
+)
 from .terminal_adapters import ensure_terminal_running
 
 # === Analytic TP/SL Logic ===
@@ -14,7 +19,13 @@ from .terminal_adapters import ensure_terminal_running
 # Endpoint: Get analytic TP/SL state
 @router.get("/account/state")
 def get_account_state_route():
-    return get_account_state()
+    state = get_account_state()
+    synced_symbol = _resolve_auto_trade_symbol_for_state(state)
+    if str(state.get("auto_trade_symbol") or "").strip().upper() != synced_symbol:
+        state["auto_trade_symbol"] = synced_symbol
+        save_account_state(state)
+    state["auto_trade_symbol_scope"] = "broker_default"
+    return state
 
 # Endpoint: Set analytic TP/SL value
 class AnalyticTPSLRequest(BaseModel):
@@ -26,6 +37,21 @@ class TradeTPSLUpdateRequest(BaseModel):
     trade_id: str
     tp_value: float | None = None
     sl_value: float | None = None
+
+
+class TradeHistorySyncSettingsRequest(BaseModel):
+    sync_all: bool = False
+    days: int | None = 90
+
+
+class AutoTradeConfigRequest(BaseModel):
+    symbol: str | None = None
+    interval_sec: float | None = None
+    auto_analytic_tpsl: bool | None = None
+    tp_value: float | None = None
+    sl_value: float | None = None
+    lot: float | None = None
+    max_open_trades: int | None = None
 
 @router.post("/account/set_analytic_tpsl")
 def set_analytic_tpsl(request: AnalyticTPSLRequest):
@@ -125,6 +151,27 @@ def save_trade_history(trade):
 
 def load_trade_history():
     return get_trade_history()
+
+
+def _resolve_auto_trade_symbol_for_state(state):
+    broker = resolve_feed_broker(state=state, require_terminal_path=False)
+    if not broker:
+        broker = get_default_broker()
+    symbol = (broker or {}).get("default_symbol") or state.get("auto_trade_symbol") or "XAUUSD"
+    return str(symbol).strip().upper() or "XAUUSD"
+
+
+def _resolve_auto_trade_broker_for_state(state):
+    broker = resolve_feed_broker(state=state, require_terminal_path=False)
+    if broker:
+        return broker
+    return get_default_broker()
+
+
+def _sync_terminal_trade_views():
+    state = get_account_state()
+    history_days = None if state.get("trade_history_sync_all") else int(state.get("trade_history_sync_days") or 90)
+    sync_all_terminal_trade_state(history_days=history_days)
 
 # === Real Trade Execution Endpoints ===
 
@@ -304,8 +351,138 @@ def set_data_feed_broker(broker_id: int = Body(...)):
         return {"status": "error", "message": "Broker not found"}
     state = get_account_state()
     state["data_feed_broker_id"] = broker_id
+    state["auto_trade_symbol"] = str(broker.get("default_symbol") or "XAUUSD").strip().upper() or "XAUUSD"
     save_account_state(state)
-    return {"status": "ok", "data_feed_broker_id": broker_id}
+    return {
+        "status": "ok",
+        "data_feed_broker_id": broker_id,
+        "auto_trade_symbol": state["auto_trade_symbol"],
+        "auto_trade_symbol_scope": "broker_default",
+    }
+
+
+@router.post("/account/set_trade_history_sync")
+def set_trade_history_sync(payload: TradeHistorySyncSettingsRequest):
+    state = get_account_state()
+    sync_all = bool(payload.sync_all)
+    days = None if sync_all else int(payload.days or 90)
+    if not sync_all and days <= 0:
+        return {"status": "error", "message": "History sync days harus lebih besar dari 0."}
+
+    state["trade_history_sync_all"] = sync_all
+    state["trade_history_sync_days"] = 90 if days is None else days
+    save_account_state(state)
+    return {
+        "status": "ok",
+        "trade_history_sync_all": state["trade_history_sync_all"],
+        "trade_history_sync_days": state["trade_history_sync_days"],
+    }
+
+
+@router.post("/account/set_auto_trade_config")
+def set_auto_trade_config(payload: AutoTradeConfigRequest):
+    state = get_account_state()
+
+    # Auto-trade symbol selalu mengikuti default symbol broker aktif.
+    if payload.symbol is not None:
+        pass
+
+    if payload.interval_sec is not None:
+        interval = float(payload.interval_sec)
+        if interval < 1 or interval > 60:
+            return {"status": "error", "message": "Interval auto-trade harus antara 1 sampai 60 detik."}
+        state["auto_trade_interval_sec"] = interval
+
+    if payload.auto_analytic_tpsl is not None:
+        state["auto_analytic_tpsl"] = bool(payload.auto_analytic_tpsl)
+
+    if payload.tp_value is not None:
+        state["tp_value"] = float(payload.tp_value)
+
+    if payload.sl_value is not None:
+        state["sl_value"] = float(payload.sl_value)
+
+    if payload.lot is not None:
+        lot = float(payload.lot)
+        if lot <= 0:
+            return {"status": "error", "message": "Lot harus lebih besar dari 0."}
+
+        state_preview = dict(state)
+        broker_for_constraints = _resolve_auto_trade_broker_for_state(state_preview)
+        symbol_for_constraints = _resolve_auto_trade_symbol_for_state(state_preview)
+        constraints = get_broker_symbol_constraints(broker_for_constraints, symbol=symbol_for_constraints, auto_start=False)
+        if constraints.get("can_open_order") and constraints.get("volume_step"):
+            lot = normalize_lot_with_constraints(lot, constraints)
+        state["lot"] = lot
+
+    if payload.max_open_trades is not None:
+        max_open = int(payload.max_open_trades)
+        if max_open <= 0:
+            return {"status": "error", "message": "Max open trades harus lebih besar dari 0."}
+        state["max_open_trades"] = max_open
+
+    state["auto_trade_symbol"] = _resolve_auto_trade_symbol_for_state(state)
+
+    save_account_state(state)
+
+    broker_for_response = _resolve_auto_trade_broker_for_state(state)
+    symbol_for_response = _resolve_auto_trade_symbol_for_state(state)
+    constraints = get_broker_symbol_constraints(broker_for_response, symbol=symbol_for_response, auto_start=False)
+    return {
+        "status": "ok",
+        "auto_trade_symbol": state.get("auto_trade_symbol"),
+        "auto_trade_symbol_scope": "broker_default",
+        "auto_trade_interval_sec": state.get("auto_trade_interval_sec"),
+        "auto_analytic_tpsl": state.get("auto_analytic_tpsl"),
+        "tp_value": state.get("tp_value"),
+        "sl_value": state.get("sl_value"),
+        "lot": state.get("lot"),
+        "max_open_trades": state.get("max_open_trades"),
+        "constraints": constraints,
+    }
+
+
+@router.get("/account/auto_trade_constraints")
+def get_auto_trade_constraints():
+    state = get_account_state()
+    broker = _resolve_auto_trade_broker_for_state(state)
+    symbol = _resolve_auto_trade_symbol_for_state(state)
+    constraints = get_broker_symbol_constraints(broker, symbol=symbol, auto_start=False)
+
+    normalized_lot = float(state.get("lot", 0.01) or 0.01)
+    if constraints.get("can_open_order") and constraints.get("volume_step"):
+        normalized_lot = normalize_lot_with_constraints(normalized_lot, constraints)
+
+    return {
+        "status": "ok",
+        "symbol": symbol,
+        "broker": broker,
+        "constraints": constraints,
+        "current_settings": {
+            "lot": state.get("lot"),
+            "max_open_trades": state.get("max_open_trades"),
+            "auto_trade_interval_sec": state.get("auto_trade_interval_sec"),
+            "tp_value": state.get("tp_value"),
+            "sl_value": state.get("sl_value"),
+            "auto_analytic_tpsl": state.get("auto_analytic_tpsl"),
+        },
+        "normalized": {
+            "lot": normalized_lot,
+        },
+    }
+
+
+@router.post("/trade/sync_history")
+def sync_trade_history_now():
+    state = get_account_state()
+    history_days = None if state.get("trade_history_sync_all") else int(state.get("trade_history_sync_days") or 90)
+    results = sync_all_terminal_trade_state(history_days=history_days)
+    return {
+        "status": "ok",
+        "trade_history_sync_all": bool(state.get("trade_history_sync_all")),
+        "trade_history_sync_days": state.get("trade_history_sync_days"),
+        "results": results,
+    }
 
 # user_open_trade structure:
 # { "user_id": {
@@ -431,16 +608,19 @@ def save_open_trade(user_id: str = Query(...), open_trade: dict = Body(...)):
 # Endpoint to get all trade history
 @router.get("/trade/history")
 def get_trade_history_endpoint():
+    _sync_terminal_trade_views()
     return load_trade_history()
 
 
 @router.get("/trade/open_count")
 def get_trade_open_count():
+    _sync_terminal_trade_views()
     return {"open_count": get_open_trades_count()}
 
 
 @router.get("/trade/open_positions")
 def get_trade_open_positions():
+    _sync_terminal_trade_views()
     return list_open_trades()
 
 

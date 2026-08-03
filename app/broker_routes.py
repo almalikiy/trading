@@ -189,6 +189,7 @@ def open_trade_v2(payload: TradeOpenRequest):
                 "slValue": sl_value,
                 "broker_id": broker["id"],
                 "broker_name": broker["name"],
+                "account_id": order.get("account_id"),
                 "platform": broker["platform"],
                 "execution_mode": method,
                 "terminal_path": broker.get("terminal_path"),

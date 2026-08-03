@@ -45,21 +45,31 @@ def init_db():
                 tp_value REAL DEFAULT 0.5,
                 sl_value REAL,
                 lot REAL DEFAULT 0.01,
-                max_open_trades INTEGER DEFAULT 1
+                max_open_trades INTEGER DEFAULT 1,
+                auto_trade_symbol TEXT DEFAULT 'XAUUSD',
+                auto_trade_interval_sec INTEGER DEFAULT 2,
+                trade_history_sync_days INTEGER DEFAULT 90,
+                trade_history_sync_all INTEGER DEFAULT 0
             )
             """
         )
         _add_column_if_missing(conn, "account_state", "auto_trade_enabled", "INTEGER DEFAULT 0")
         _add_column_if_missing(conn, "account_state", "keep_terminal_alive", "INTEGER DEFAULT 1")
         _add_column_if_missing(conn, "account_state", "data_feed_broker_id", "INTEGER")
+        _add_column_if_missing(conn, "account_state", "auto_trade_symbol", "TEXT DEFAULT 'XAUUSD'")
+        _add_column_if_missing(conn, "account_state", "auto_trade_interval_sec", "INTEGER DEFAULT 2")
+        _add_column_if_missing(conn, "account_state", "trade_history_sync_days", "INTEGER DEFAULT 90")
+        _add_column_if_missing(conn, "account_state", "trade_history_sync_all", "INTEGER DEFAULT 0")
         conn.execute(
             """
             INSERT INTO account_state (
                 id, balance, initial_balance, enable_real_trade, auto_trade_enabled,
                 keep_terminal_alive, data_feed_broker_id,
-                auto_analytic_tpsl, tp_value, sl_value, lot, max_open_trades
+                auto_analytic_tpsl, tp_value, sl_value, lot, max_open_trades,
+                auto_trade_symbol, auto_trade_interval_sec,
+                trade_history_sync_days, trade_history_sync_all
             )
-            VALUES (1, 1000, 1000, 0, 0, 1, NULL, 0, 0.5, NULL, 0.01, 1)
+            VALUES (1, 1000, 1000, 0, 0, 1, NULL, 0, 0.5, NULL, 0.01, 1, 'XAUUSD', 2, 90, 0)
             ON CONFLICT(id) DO NOTHING
             """
         )
@@ -84,6 +94,7 @@ def init_db():
                 slValue REAL,
                 broker_id INTEGER,
                 broker_name TEXT,
+                account_id INTEGER,
                 platform TEXT,
                 execution_mode TEXT,
                 terminal_path TEXT
@@ -92,6 +103,7 @@ def init_db():
         )
         _add_column_if_missing(conn, "trade_history", "broker_id", "INTEGER")
         _add_column_if_missing(conn, "trade_history", "broker_name", "TEXT")
+        _add_column_if_missing(conn, "trade_history", "account_id", "INTEGER")
         _add_column_if_missing(conn, "trade_history", "platform", "TEXT")
         _add_column_if_missing(conn, "trade_history", "execution_mode", "TEXT")
         _add_column_if_missing(conn, "trade_history", "terminal_path", "TEXT")
@@ -108,12 +120,14 @@ def init_db():
                 timestamp INTEGER,
                 message TEXT,
                 broker_id INTEGER,
-                broker_name TEXT
+                broker_name TEXT,
+                account_id INTEGER
             )
             """
         )
         _add_column_if_missing(conn, "mt5_error_log", "broker_id", "INTEGER")
         _add_column_if_missing(conn, "mt5_error_log", "broker_name", "TEXT")
+        _add_column_if_missing(conn, "mt5_error_log", "account_id", "INTEGER")
 
         conn.execute(
             """
@@ -253,7 +267,9 @@ def get_account_state():
             """
             SELECT balance, initial_balance, enable_real_trade, auto_analytic_tpsl,
                      auto_trade_enabled, keep_terminal_alive, data_feed_broker_id,
-                     tp_value, sl_value, lot, max_open_trades
+                     tp_value, sl_value, lot, max_open_trades,
+                     auto_trade_symbol, auto_trade_interval_sec,
+                     trade_history_sync_days, trade_history_sync_all
             FROM account_state
             WHERE id = 1
             """
@@ -271,6 +287,10 @@ def get_account_state():
                 "sl_value": None,
                 "lot": 0.01,
                 "max_open_trades": 1,
+                "auto_trade_symbol": "XAUUSD",
+                "auto_trade_interval_sec": 2,
+                "trade_history_sync_days": 90,
+                "trade_history_sync_all": False,
                 "history": [],
             }
         transactions = get_account_transactions(limit=200)
@@ -286,6 +306,10 @@ def get_account_state():
             "sl_value": row["sl_value"],
             "lot": row["lot"],
             "max_open_trades": row["max_open_trades"],
+            "auto_trade_symbol": (row["auto_trade_symbol"] or "XAUUSD"),
+            "auto_trade_interval_sec": row["auto_trade_interval_sec"] if row["auto_trade_interval_sec"] is not None else 2,
+            "trade_history_sync_days": row["trade_history_sync_days"] if row["trade_history_sync_days"] is not None else 90,
+            "trade_history_sync_all": bool(row["trade_history_sync_all"]),
             "history": transactions,
         }
 
@@ -297,9 +321,11 @@ def save_account_state(state):
             INSERT INTO account_state (
                 id, balance, initial_balance, enable_real_trade, auto_trade_enabled,
                 keep_terminal_alive, data_feed_broker_id,
-                auto_analytic_tpsl, tp_value, sl_value, lot, max_open_trades
+                auto_analytic_tpsl, tp_value, sl_value, lot, max_open_trades,
+                auto_trade_symbol, auto_trade_interval_sec,
+                trade_history_sync_days, trade_history_sync_all
             )
-            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 balance = excluded.balance,
                 initial_balance = excluded.initial_balance,
@@ -311,7 +337,11 @@ def save_account_state(state):
                 tp_value = excluded.tp_value,
                 sl_value = excluded.sl_value,
                 lot = excluded.lot,
-                max_open_trades = excluded.max_open_trades
+                max_open_trades = excluded.max_open_trades,
+                auto_trade_symbol = excluded.auto_trade_symbol,
+                auto_trade_interval_sec = excluded.auto_trade_interval_sec,
+                trade_history_sync_days = excluded.trade_history_sync_days,
+                trade_history_sync_all = excluded.trade_history_sync_all
             """,
             (
                 state.get("balance", 1000),
@@ -325,6 +355,10 @@ def save_account_state(state):
                 state.get("sl_value", None),
                 state.get("lot", 0.01),
                 state.get("max_open_trades", 1),
+                state.get("auto_trade_symbol", "XAUUSD"),
+                state.get("auto_trade_interval_sec", 2),
+                state.get("trade_history_sync_days", 90),
+                int(bool(state.get("trade_history_sync_all", False))),
             ),
         )
 
@@ -355,18 +389,25 @@ def get_account_transactions(limit=200):
 
 
 def append_trade_history(trade):
+    status = trade.get("status") or ("open" if trade.get("exitTime") is None and trade.get("exit") is None else "closed")
     with get_db() as conn:
         conn.execute(
             """
             INSERT INTO trade_history (
-                type, entry, exit, profit, entryTime, exitTime, reason,
-                tpValue, slValue, broker_id, broker_name, platform,
-                execution_mode, terminal_path
+                trade_id, status, type, symbol, lot, ticket,
+                entry, exit, profit, entryTime, exitTime, reason,
+                tpValue, slValue, broker_id, broker_name, account_id,
+                platform, execution_mode, terminal_path
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                trade.get("trade_id"),
+                status,
                 trade.get("type"),
+                trade.get("symbol"),
+                trade.get("lot"),
+                trade.get("ticket"),
                 trade.get("entry"),
                 trade.get("exit"),
                 trade.get("profit"),
@@ -377,6 +418,7 @@ def append_trade_history(trade):
                 trade.get("slValue"),
                 trade.get("broker_id"),
                 trade.get("broker_name"),
+                trade.get("account_id"),
                 trade.get("platform"),
                 trade.get("execution_mode"),
                 trade.get("terminal_path"),
@@ -389,7 +431,7 @@ def get_trade_history():
         rows = conn.execute(
             """
             SELECT type, entry, exit, profit, entryTime, exitTime, reason,
-                     tpValue, slValue, broker_id, broker_name, platform,
+                                         tpValue, slValue, broker_id, broker_name, account_id, platform,
                      trade_id, status, symbol, lot, ticket,
                    execution_mode, terminal_path
             FROM trade_history
@@ -409,6 +451,7 @@ def get_trade_history():
                 "slValue": row["slValue"],
                 "broker_id": row["broker_id"],
                 "broker_name": row["broker_name"],
+                "account_id": row["account_id"],
                 "platform": row["platform"],
                 "trade_id": row["trade_id"],
                 "status": row["status"],
@@ -429,10 +472,10 @@ def create_trade_open_record(trade):
             INSERT INTO trade_history (
                 trade_id, status, type, symbol, lot, ticket,
                 entry, exit, profit, entryTime, exitTime, reason,
-                tpValue, slValue, broker_id, broker_name, platform,
+                tpValue, slValue, broker_id, broker_name, account_id, platform,
                 execution_mode, terminal_path
             )
-            VALUES (?, 'open', ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, 'open', ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade.get("trade_id"),
@@ -447,11 +490,165 @@ def create_trade_open_record(trade):
                 trade.get("slValue"),
                 trade.get("broker_id"),
                 trade.get("broker_name"),
+                trade.get("account_id"),
                 trade.get("platform"),
                 trade.get("execution_mode"),
                 trade.get("terminal_path"),
             ),
         )
+
+
+def upsert_trade_history_record(trade, match_open_window_seconds=300):
+    ticket = trade.get("ticket")
+    broker_id = trade.get("broker_id")
+    account_id = trade.get("account_id")
+    trade_id = trade.get("trade_id")
+    status = trade.get("status") or "closed"
+    entry_time = trade.get("entryTime")
+    symbol = trade.get("symbol")
+    trade_type = trade.get("type")
+
+    with get_db() as conn:
+        row = None
+
+        if trade_id:
+            row = conn.execute(
+                "SELECT id FROM trade_history WHERE trade_id = ? ORDER BY id DESC LIMIT 1",
+                (trade_id,),
+            ).fetchone()
+
+        if not row and ticket not in (None, "", 0):
+            if account_id is None:
+                row = conn.execute(
+                    """
+                    SELECT id FROM trade_history
+                    WHERE ticket = ?
+                      AND COALESCE(broker_id, -1) = COALESCE(?, -1)
+                    ORDER BY CASE WHEN status = 'open' THEN 0 ELSE 1 END, id DESC
+                    LIMIT 1
+                    """,
+                    (ticket, broker_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT id FROM trade_history
+                    WHERE ticket = ?
+                      AND COALESCE(broker_id, -1) = COALESCE(?, -1)
+                      AND COALESCE(account_id, -1) = COALESCE(?, -1)
+                    ORDER BY CASE WHEN status = 'open' THEN 0 ELSE 1 END, id DESC
+                    LIMIT 1
+                    """,
+                    (ticket, broker_id, account_id),
+                ).fetchone()
+
+        if not row and status == "open" and symbol and trade_type and entry_time:
+            row = conn.execute(
+                """
+                SELECT id FROM trade_history
+                WHERE status = 'open'
+                  AND (ticket IS NULL OR ticket = 0)
+                  AND COALESCE(broker_id, -1) = COALESCE(?, -1)
+                  AND symbol = ?
+                  AND UPPER(type) = UPPER(?)
+                  AND ABS(COALESCE(entryTime, 0) - ?) <= ?
+                ORDER BY ABS(COALESCE(entryTime, 0) - ?) ASC, id DESC
+                LIMIT 1
+                """,
+                (broker_id, symbol, trade_type, int(entry_time), int(match_open_window_seconds), int(entry_time)),
+            ).fetchone()
+
+        if row:
+            conn.execute(
+                """
+                UPDATE trade_history
+                SET trade_id = COALESCE(trade_id, ?),
+                    status = ?,
+                    type = COALESCE(?, type),
+                    symbol = COALESCE(?, symbol),
+                    lot = COALESCE(?, lot),
+                    ticket = COALESCE(?, ticket),
+                    entry = COALESCE(?, entry),
+                    exit = CASE WHEN ? IS NULL THEN exit ELSE ? END,
+                    profit = CASE WHEN ? IS NULL THEN profit ELSE ? END,
+                    entryTime = COALESCE(?, entryTime),
+                    exitTime = CASE WHEN ? IS NULL THEN exitTime ELSE ? END,
+                    reason = COALESCE(?, reason),
+                    tpValue = CASE WHEN ? IS NULL THEN tpValue ELSE ? END,
+                    slValue = CASE WHEN ? IS NULL THEN slValue ELSE ? END,
+                    broker_id = COALESCE(?, broker_id),
+                    broker_name = COALESCE(?, broker_name),
+                    account_id = COALESCE(?, account_id),
+                    platform = COALESCE(?, platform),
+                    execution_mode = COALESCE(?, execution_mode),
+                    terminal_path = COALESCE(?, terminal_path)
+                WHERE id = ?
+                """,
+                (
+                    trade_id,
+                    status,
+                    trade_type,
+                    symbol,
+                    trade.get("lot"),
+                    ticket,
+                    trade.get("entry"),
+                    trade.get("exit"),
+                    trade.get("exit"),
+                    trade.get("profit"),
+                    trade.get("profit"),
+                    entry_time,
+                    trade.get("exitTime"),
+                    trade.get("exitTime"),
+                    trade.get("reason"),
+                    trade.get("tpValue"),
+                    trade.get("tpValue"),
+                    trade.get("slValue"),
+                    trade.get("slValue"),
+                    broker_id,
+                    trade.get("broker_name"),
+                    account_id,
+                    trade.get("platform"),
+                    trade.get("execution_mode"),
+                    trade.get("terminal_path"),
+                    row["id"],
+                ),
+            )
+            return row["id"]
+
+        conn.execute(
+            """
+            INSERT INTO trade_history (
+                trade_id, status, type, symbol, lot, ticket,
+                entry, exit, profit, entryTime, exitTime, reason,
+                tpValue, slValue, broker_id, broker_name, account_id,
+                platform, execution_mode, terminal_path
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                trade_id,
+                status,
+                trade_type,
+                symbol,
+                trade.get("lot"),
+                ticket,
+                trade.get("entry"),
+                trade.get("exit"),
+                trade.get("profit"),
+                entry_time,
+                trade.get("exitTime"),
+                trade.get("reason"),
+                trade.get("tpValue"),
+                trade.get("slValue"),
+                broker_id,
+                trade.get("broker_name"),
+                account_id,
+                trade.get("platform"),
+                trade.get("execution_mode"),
+                trade.get("terminal_path"),
+            ),
+        )
+        return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
 
 
 def close_trade_record(trade_id, *, exit_price=None, profit=None, exit_time=None, ticket=None, reason="close"):
@@ -477,7 +674,7 @@ def list_open_trades(broker_id=None):
             rows = conn.execute(
                 """
                 SELECT trade_id, type, symbol, lot, ticket, entry, entryTime,
-                       tpValue, slValue, broker_id, broker_name, platform,
+                      tpValue, slValue, broker_id, broker_name, account_id, platform,
                        execution_mode, terminal_path
                 FROM trade_history
                 WHERE status = 'open'
@@ -488,7 +685,7 @@ def list_open_trades(broker_id=None):
             rows = conn.execute(
                 """
                 SELECT trade_id, type, symbol, lot, ticket, entry, entryTime,
-                       tpValue, slValue, broker_id, broker_name, platform,
+                      tpValue, slValue, broker_id, broker_name, account_id, platform,
                        execution_mode, terminal_path
                 FROM trade_history
                 WHERE status = 'open' AND broker_id = ?
@@ -509,6 +706,7 @@ def list_open_trades(broker_id=None):
             "slValue": row["slValue"],
             "broker_id": row["broker_id"],
             "broker_name": row["broker_name"],
+            "account_id": row["account_id"],
             "platform": row["platform"],
             "execution_mode": row["execution_mode"],
             "terminal_path": row["terminal_path"],
@@ -542,18 +740,18 @@ def clear_trade_history():
         conn.execute("DELETE FROM trade_history")
 
 
-def log_mt5_error(message, broker_id=None, broker_name=None, timestamp=None):
+def log_mt5_error(message, broker_id=None, broker_name=None, account_id=None, timestamp=None):
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO mt5_error_log (timestamp, message, broker_id, broker_name) VALUES (?, ?, ?, ?)",
-            (int(timestamp or time.time()), message, broker_id, broker_name),
+            "INSERT INTO mt5_error_log (timestamp, message, broker_id, broker_name, account_id) VALUES (?, ?, ?, ?, ?)",
+            (int(timestamp or time.time()), message, broker_id, broker_name, account_id),
         )
 
 
 def get_mt5_error_log(limit=500):
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT timestamp, message, broker_id, broker_name FROM mt5_error_log ORDER BY id DESC LIMIT ?",
+            "SELECT timestamp, message, broker_id, broker_name, account_id FROM mt5_error_log ORDER BY id DESC LIMIT ?",
             (int(limit),),
         ).fetchall()
         return [
@@ -562,6 +760,7 @@ def get_mt5_error_log(limit=500):
                 "message": row["message"],
                 "broker_id": row["broker_id"],
                 "broker_name": row["broker_name"],
+                "account_id": row["account_id"],
             }
             for row in rows
         ]

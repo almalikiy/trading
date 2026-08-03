@@ -687,7 +687,20 @@ export default function App( { darkMode, setDarkMode }) {
         <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 2, overflowX: "auto", width: "100%" }}>
           <Box sx={{ display: "flex", flexDirection: { xs: "column", md: "row" }, gap: 2 }}>
             {/* Panel Signal */}
-            <Box sx={{ flex: 1, minWidth: 0, borderRight: { md: "1px solid #eee" }, borderRadius: 1, border: `2px solid ${signal === "wait" ? "#bdbdbd" : getSignalColor(signal)}`, p: 2,}}>
+            <Box sx={{ flex: 1, minWidth: 0, borderRight: { md: "1px solid #eee" }, 
+              borderRadius: 1, border: `2px solid ${signal === "wait" ? "#bdbdbd" : getSignalColor(signal)}`, p: 2,
+              animation: signal === "wait" ? "none" : "signalPulse 1s infinite",
+              "@keyframes signalPulse": {
+                "0%": { backgroundColor: "transparent" },
+                "50%": {
+                  backgroundColor:
+                    signal === "buy"
+                      ? "rgba(56,142,60,0.10)"
+                      : "rgba(211,47,47,0.10)",
+                },
+                "100%": { backgroundColor: "transparent" },
+              },
+            }}>
               <Typography variant="h6" sx={{ fontWeight: "bold", letterSpacing: 2 }}>
                 Signal: <b style={{ color: signal === "buy" ? "#1b5e20" : "#424242" }}>{signal ? signal.toUpperCase() : "-"}</b>
               </Typography>
@@ -889,6 +902,7 @@ export default function App( { darkMode, setDarkMode }) {
                     <TableCell>TP</TableCell>
                     <TableCell>SL</TableCell>
                     <TableCell>Broker</TableCell>
+                    <TableCell>Account</TableCell>
                     <TableCell>Exec</TableCell>
                     <TableCell align="right">Action</TableCell>
                   </TableRow>
@@ -928,6 +942,7 @@ export default function App( { darkMode, setDarkMode }) {
                           />
                         </TableCell>
                         <TableCell>{trade.broker_name || "-"}</TableCell>
+                        <TableCell>{trade.account_id || "-"}</TableCell>
                         <TableCell>{trade.execution_mode || "-"}</TableCell>
                         <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
                           <Button size="small" variant="outlined" sx={{ mr: 1 }} disabled={rowLoading} onClick={() => handleSaveTradeTPSL(id)}>

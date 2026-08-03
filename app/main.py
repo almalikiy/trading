@@ -63,7 +63,7 @@ app.include_router(broker_router)
 def startup_event():
     init_db()
     #start_simulation_thread()
-    #start_auto_trader_thread()
+    start_auto_trader_thread()
 
 @app.get("/")
 def root():

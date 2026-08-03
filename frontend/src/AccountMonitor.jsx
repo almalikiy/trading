@@ -56,6 +56,18 @@ export default function AccountMonitor() {
   const [autoTradeEnabled, setAutoTradeEnabled] = useState(false);
   const [keepTerminalAlive, setKeepTerminalAlive] = useState(true);
   const [dataFeedBrokerId, setDataFeedBrokerId] = useState("");
+  const [autoTradeSymbol, setAutoTradeSymbol] = useState("XAUUSD");
+  const [autoTradeIntervalSec, setAutoTradeIntervalSec] = useState(2);
+  const [autoAnalyticTpSl, setAutoAnalyticTpSl] = useState(false);
+  const [autoTradeTpValue, setAutoTradeTpValue] = useState(0.5);
+  const [autoTradeSlValue, setAutoTradeSlValue] = useState(0.5);
+  const [autoTradeConfigSaving, setAutoTradeConfigSaving] = useState(false);
+  const [autoTradeConstraints, setAutoTradeConstraints] = useState(null);
+  const [autoTradeConstraintsLoading, setAutoTradeConstraintsLoading] = useState(false);
+  const [tradeHistorySyncMode, setTradeHistorySyncMode] = useState("days");
+  const [tradeHistorySyncDays, setTradeHistorySyncDays] = useState(90);
+  const [tradeHistorySyncSaving, setTradeHistorySyncSaving] = useState(false);
+  const [tradeHistorySyncRunning, setTradeHistorySyncRunning] = useState(false);
   const [runtimeLoaded, setRuntimeLoaded] = useState(false);
   const [addingBroker, setAddingBroker] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, severity: "info", message: "" });
@@ -79,6 +91,13 @@ export default function AccountMonitor() {
         setAutoTradeEnabled(!!data.auto_trade_enabled);
         setKeepTerminalAlive(data.keep_terminal_alive !== false);
         setDataFeedBrokerId(data.data_feed_broker_id ? String(data.data_feed_broker_id) : "");
+        setAutoTradeSymbol(String(data.auto_trade_symbol || "XAUUSD"));
+        setAutoTradeIntervalSec(Number(data.auto_trade_interval_sec || 2));
+        setAutoAnalyticTpSl(!!data.auto_analytic_tpsl);
+        setAutoTradeTpValue(Number(data.tp_value ?? 0.5));
+        setAutoTradeSlValue(Number(data.sl_value ?? 0.5));
+        setTradeHistorySyncMode(data.trade_history_sync_all ? "all" : "days");
+        setTradeHistorySyncDays(Number(data.trade_history_sync_days || 90));
         setRuntimeLoaded(true);
       });
   }, []);
@@ -169,7 +188,17 @@ export default function AccountMonitor() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(Number(dataFeedBrokerId))
-    });
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.status === "ok" && data.auto_trade_symbol) {
+          setAutoTradeSymbol(String(data.auto_trade_symbol));
+        }
+        return refreshAccountState();
+      })
+      .catch(() => {
+        // Ignore transient update errors; UI will refresh on next poll/manual save.
+      });
   }, [dataFeedBrokerId, runtimeLoaded]);
 
   const handleDeposit = () => {
@@ -213,6 +242,157 @@ export default function AccountMonitor() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(maxOpen)
     }).then(() => window.location.reload());
+  };
+
+  const refreshAccountState = async () => {
+    const res = await fetch(`${API_BASE}/account/state`);
+    const data = await res.json();
+    setState(data);
+    setAutoTradeSymbol(String(data.auto_trade_symbol || "XAUUSD"));
+    setAutoTradeIntervalSec(Number(data.auto_trade_interval_sec || 2));
+    setAutoAnalyticTpSl(!!data.auto_analytic_tpsl);
+    setAutoTradeTpValue(Number(data.tp_value ?? 0.5));
+    setAutoTradeSlValue(Number(data.sl_value ?? 0.5));
+    setTradeHistorySyncMode(data.trade_history_sync_all ? "all" : "days");
+    setTradeHistorySyncDays(Number(data.trade_history_sync_days || 90));
+  };
+
+  const normalizeLotByConstraints = (rawLot, constraintsPayload) => {
+    const constraints = constraintsPayload?.constraints;
+    const value = Number(rawLot || 0);
+    if (!Number.isFinite(value) || value <= 0) return Number(lot || 0.01);
+    if (!constraints || !constraints.can_open_order || !constraints.volume_step) {
+      return Math.max(0.01, value);
+    }
+
+    const min = Number(constraints.volume_min || 0.01);
+    const max = Number(constraints.volume_max || value);
+    const step = Number(constraints.volume_step || 0);
+    let next = Math.min(Math.max(value, min), max);
+    if (step > 0) {
+      const n = Math.round((next - min) / step);
+      next = min + (n * step);
+      next = Math.min(Math.max(next, min), max);
+      const decimals = String(step).includes(".") ? String(step).split(".")[1].length : 0;
+      next = Number(next.toFixed(Math.min(Math.max(decimals, 2), 8)));
+    }
+    return next;
+  };
+
+  const loadAutoTradeConstraints = async ({ normalizeLot = true } = {}) => {
+    setAutoTradeConstraintsLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/account/auto_trade_constraints`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.status === "error") {
+        throw new Error(data.message || data.detail || "Gagal mengambil batasan auto-trade.");
+      }
+      setAutoTradeConstraints(data);
+      if (data?.symbol) {
+        setAutoTradeSymbol(String(data.symbol));
+      }
+      if (normalizeLot) {
+        const normalizedLot = Number(data?.normalized?.lot);
+        if (Number.isFinite(normalizedLot) && Math.abs(normalizedLot - Number(lot || 0)) > 1e-9) {
+          setLot(normalizedLot);
+        }
+      }
+    } catch (err) {
+      setAutoTradeConstraints(null);
+    } finally {
+      setAutoTradeConstraintsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!runtimeLoaded || !autoTradeEnabled) return;
+    loadAutoTradeConstraints();
+  }, [runtimeLoaded, autoTradeEnabled, dataFeedBrokerId]);
+
+  const saveAutoTradeConfig = async () => {
+    const safeInterval = Math.max(1, Math.min(60, Number(autoTradeIntervalSec || 2)));
+    const safeLot = Math.max(0.01, Number(lot || 0.01));
+    const safeMaxOpen = Math.max(1, Number(maxOpen || 1));
+    setAutoTradeConfigSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/account/set_auto_trade_config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          interval_sec: safeInterval,
+          auto_analytic_tpsl: autoAnalyticTpSl,
+          tp_value: Number(autoTradeTpValue || 0),
+          sl_value: Number(autoTradeSlValue || 0),
+          lot: safeLot,
+          max_open_trades: safeMaxOpen,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.status === "error") {
+        throw new Error(data.message || data.detail || "Gagal menyimpan konfigurasi auto-trade.");
+      }
+      await refreshAccountState();
+      setLot(Number(data.lot ?? safeLot));
+      setMaxOpen(Number(data.max_open_trades ?? safeMaxOpen));
+      if (data.constraints) {
+        setAutoTradeConstraints((prev) => ({
+          ...(prev || {}),
+          constraints: data.constraints,
+          symbol: data.constraints.symbol || autoTradeSymbol,
+        }));
+      }
+      await loadAutoTradeConstraints();
+      setSnackbar({ open: true, severity: "success", message: "Detail auto-trade berhasil disimpan." });
+    } catch (err) {
+      setSnackbar({ open: true, severity: "error", message: err.message || "Tidak bisa menyimpan detail auto-trade." });
+    } finally {
+      setAutoTradeConfigSaving(false);
+    }
+  };
+
+  const saveTradeHistorySync = async () => {
+    const days = Math.max(1, Number(tradeHistorySyncDays || 90));
+    setTradeHistorySyncSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/account/set_trade_history_sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sync_all: tradeHistorySyncMode === "all",
+          days,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.status === "error") {
+        throw new Error(data.message || data.detail || "Gagal menyimpan konfigurasi sync history.");
+      }
+      await refreshAccountState();
+      setSnackbar({ open: true, severity: "success", message: "Konfigurasi sync history tersimpan." });
+    } catch (err) {
+      setSnackbar({ open: true, severity: "error", message: err.message || "Tidak bisa menyimpan konfigurasi sync history." });
+    } finally {
+      setTradeHistorySyncSaving(false);
+    }
+  };
+
+  const runTradeHistorySync = async () => {
+    setTradeHistorySyncRunning(true);
+    try {
+      const res = await fetch(`${API_BASE}/trade/sync_history`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.status === "error") {
+        throw new Error(data.message || data.detail || "Sinkronisasi history gagal.");
+      }
+      const label = data.trade_history_sync_all ? "semua history" : `${data.trade_history_sync_days} hari`;
+      setSnackbar({ open: true, severity: "success", message: `Sinkronisasi history selesai untuk ${label}.` });
+    } catch (err) {
+      setSnackbar({ open: true, severity: "error", message: err.message || "Tidak bisa menjalankan sinkronisasi history." });
+    } finally {
+      setTradeHistorySyncRunning(false);
+    }
   };
 
   const createBroker = async () => {
@@ -364,6 +544,186 @@ const setDefaultBroker = async (id) => {
             </MenuItem>
           ))}
         </TextField>
+
+        <Box sx={{ mt: 2 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>Auto Trade Detail</Typography>
+          <Grid container spacing={1} alignItems="center" sx={{ mb: 2 }}>
+            <Grid item xs={12} md={2}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Symbol"
+                value={autoTradeSymbol}
+                InputProps={{ readOnly: true }}
+                placeholder="XAUUSD"
+                helperText="Mengikuti default symbol broker aktif"
+              />
+            </Grid>
+            <Grid item xs={12} md={2}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Cycle (sec)"
+                type="number"
+                value={autoTradeIntervalSec}
+                onChange={(e) => setAutoTradeIntervalSec(Number(e.target.value))}
+                inputProps={{ min: 1, max: 60, step: 1 }}
+                helperText="1 - 60 detik"
+              />
+            </Grid>
+            <Grid item xs={12} md={2}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Lot"
+                type="number"
+                value={lot}
+                onChange={(e) => setLot(Number(e.target.value))}
+                onBlur={() => {
+                  const corrected = normalizeLotByConstraints(lot, autoTradeConstraints);
+                  if (Math.abs(corrected - Number(lot || 0)) > 1e-9) {
+                    setLot(corrected);
+                    setSnackbar({
+                      open: true,
+                      severity: "info",
+                      message: `Lot disesuaikan ke nilai valid broker: ${corrected}`,
+                    });
+                  }
+                }}
+                inputProps={{ min: 0.01, step: 0.01 }}
+                helperText={autoTradeConstraints?.constraints?.can_open_order
+                  ? `Min ${autoTradeConstraints.constraints.volume_min} | Step ${autoTradeConstraints.constraints.volume_step} | Max ${autoTradeConstraints.constraints.volume_max}`
+                  : "Lot akan divalidasi saat constraints broker tersedia."}
+              />
+            </Grid>
+            <Grid item xs={12} md={2}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Max Open"
+                type="number"
+                value={maxOpen}
+                onChange={(e) => setMaxOpen(Number(e.target.value))}
+                inputProps={{ min: 1, step: 1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={2}>
+              <TextField
+                fullWidth
+                size="small"
+                label="TP Value"
+                type="number"
+                value={autoTradeTpValue}
+                onChange={(e) => setAutoTradeTpValue(Number(e.target.value))}
+                disabled={autoAnalyticTpSl}
+                inputProps={{ min: 0, step: 0.1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={2}>
+              <TextField
+                fullWidth
+                size="small"
+                label="SL Value"
+                type="number"
+                value={autoTradeSlValue}
+                onChange={(e) => setAutoTradeSlValue(Number(e.target.value))}
+                disabled={autoAnalyticTpSl}
+                inputProps={{ min: 0, step: 0.1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <FormControlLabel
+                control={<Switch checked={autoAnalyticTpSl} onChange={(e) => setAutoAnalyticTpSl(e.target.checked)} />}
+                label="Auto Analytic TP/SL"
+              />
+            </Grid>
+            <Grid item xs={12} md={8}>
+              <Button variant="contained" onClick={saveAutoTradeConfig} disabled={autoTradeConfigSaving}>
+                {autoTradeConfigSaving ? "Saving..." : "Save Auto Trade Detail"}
+              </Button>
+              <Button
+                variant="outlined"
+                sx={{ ml: 1 }}
+                onClick={() => loadAutoTradeConstraints()}
+                disabled={autoTradeConstraintsLoading}
+              >
+                {autoTradeConstraintsLoading ? "Checking..." : "Refresh Constraints"}
+              </Button>
+            </Grid>
+            <Grid item xs={12}>
+              <Alert severity="info" sx={{ mt: 0.5 }}>
+                Auto-trade hanya berlaku untuk default symbol broker yang aktif dipilih. Jika satu broker punya banyak symbol aktif, backend tetap eksekusi auto-trade hanya pada default symbol broker tersebut.
+              </Alert>
+            </Grid>
+            <Grid item xs={12}>
+              <Paper variant="outlined" sx={{ p: 1.5, mt: 0.5, bgcolor: "background.default" }}>
+                <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
+                  Open Trade Constraints {autoTradeConstraints?.symbol ? `(${autoTradeConstraints.symbol})` : ""}
+                </Typography>
+                {!autoTradeConstraints ? (
+                  <Typography variant="caption" color="text.secondary">
+                    Constraint belum tersedia. Aktifkan Auto Trade dan klik Refresh Constraints.
+                  </Typography>
+                ) : (
+                  <Grid container spacing={1}>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Broker: {autoTradeConstraints?.broker?.name || autoTradeConstraints?.constraints?.broker_name || "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Account: {autoTradeConstraints?.constraints?.account_id || "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Can Open: {autoTradeConstraints?.constraints?.can_open_order ? "Yes" : "No"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Reason: {autoTradeConstraints?.constraints?.reason || "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Lot Min: {autoTradeConstraints?.constraints?.volume_min ?? "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Lot Step: {autoTradeConstraints?.constraints?.volume_step ?? "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Lot Max: {autoTradeConstraints?.constraints?.volume_max ?? "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Volume Limit: {autoTradeConstraints?.constraints?.volume_limit ?? "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Digits: {autoTradeConstraints?.constraints?.digits ?? "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Point: {autoTradeConstraints?.constraints?.point ?? "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Stops Level: {autoTradeConstraints?.constraints?.trade_stops_level ?? "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Freeze Level: {autoTradeConstraints?.constraints?.trade_freeze_level ?? "-"}</Typography></Grid>
+                  </Grid>
+                )}
+              </Paper>
+            </Grid>
+          </Grid>
+
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>Trade History Sync</Typography>
+          <Grid container spacing={1} alignItems="center">
+            <Grid item xs={12} md={3}>
+              <TextField
+                select
+                fullWidth
+                label="Sync Range"
+                value={tradeHistorySyncMode}
+                onChange={(e) => setTradeHistorySyncMode(e.target.value)}
+                size="small"
+              >
+                <MenuItem value="days">Berdasarkan jumlah hari</MenuItem>
+                <MenuItem value="all">Semua history terminal</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                label="Jumlah Hari"
+                type="number"
+                value={tradeHistorySyncDays}
+                onChange={(e) => setTradeHistorySyncDays(Number(e.target.value))}
+                size="small"
+                disabled={tradeHistorySyncMode === "all"}
+                helperText={tradeHistorySyncMode === "all" ? "Diabaikan saat mode semua history aktif." : "Contoh: 30, 90, 365, 1000."}
+                inputProps={{ min: 1, step: 1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                <Button variant="contained" onClick={saveTradeHistorySync} disabled={tradeHistorySyncSaving}>
+                  {tradeHistorySyncSaving ? "Saving..." : "Save Sync Setting"}
+                </Button>
+                <Button variant="outlined" onClick={runTradeHistorySync} disabled={tradeHistorySyncRunning}>
+                  {tradeHistorySyncRunning ? "Syncing..." : "Sync Now"}
+                </Button>
+              </Box>
+            </Grid>
+          </Grid>
+        </Box>
       </Paper>
       <Grid container spacing={2}>
         <Grid item xs={12} md={6}>
@@ -407,7 +767,7 @@ const setDefaultBroker = async (id) => {
         <ul>
           {state.history && state.history.length > 0 ? state.history.map((h, i) => (
             <li key={i}>{h.type} {h.amount} {h.note ? `(${h.note})` : ""}</li>
-          )) : <li>No history yet.</li>}
+          )) : <li>No history yet (deposit, withdrawal, adjustment).</li>}
         </ul>
       </Paper>
 

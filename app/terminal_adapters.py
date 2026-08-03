@@ -2,11 +2,13 @@ import os
 import subprocess
 import threading
 import time
+from datetime import datetime, timedelta
+import math
 from typing import Optional
 
 import MetaTrader5 as mt5
 
-from .db import log_mt5_error
+from .db import list_brokers, list_open_trades, log_mt5_error, upsert_trade_history_record
 
 
 _PROCESS_PATHS_CACHE = {"data": set(), "expires_at": 0.0}
@@ -87,44 +89,145 @@ class MT5Adapter(TerminalAdapter):
             return mt5.initialize(path=self.terminal_path)
         return mt5.initialize()
 
-    def open_trade(self, symbol: str, lot: float, trade_type: str):
+    def _current_account_id(self):
+        account = mt5.account_info()
+        login = getattr(account, "login", None) if account else None
+        return int(login) if login is not None else None
+
+    def _find_open_position(self, symbol: str, lot: float, trade_type: str):
+        expected_type = mt5.POSITION_TYPE_BUY if trade_type == "buy" else mt5.POSITION_TYPE_SELL
+        positions = mt5.positions_get(symbol=symbol) or []
+        candidates = []
+        for position in positions:
+            if getattr(position, "type", None) != expected_type:
+                continue
+            volume = float(getattr(position, "volume", 0) or 0)
+            if abs(volume - float(lot)) > 1e-9:
+                continue
+            candidates.append(position)
+        if not candidates:
+            return None
+        return max(candidates, key=lambda position: (int(getattr(position, "time", 0) or 0), int(getattr(position, "ticket", 0) or 0)))
+
+    def open_trade(self, symbol: str, lot: float, trade_type: str, tp: float = None, sl: float = None):
         if not self._initialize():
             raise RuntimeError("MT5 not connected")
-        order_type = mt5.ORDER_TYPE_BUY if trade_type == "buy" else mt5.ORDER_TYPE_SELL
+        account_id = self._current_account_id()
+        info = mt5.symbol_info(symbol)
+        if not info:
+            mt5.shutdown()
+            raise RuntimeError(f"Symbol {symbol} not found")
         tick = mt5.symbol_info_tick(symbol)
         if not tick:
             mt5.shutdown()
             raise RuntimeError(f"No tick data for {symbol}")
-        price = tick.ask if trade_type == "buy" else tick.bid
-        req = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": lot,
-            "type": order_type,
-            "price": price,
-            "deviation": 20,
-            "magic": 0,
-            "comment": "",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
-        }
-        result = mt5.order_send(req)
-        mt5.shutdown()
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            log_mt5_error(f"[{self.broker_name}] open failed: {result.retcode} {result.comment}")
-            raise RuntimeError(f"Order send failed: {result.retcode} {result.comment}")
-        return {"status": "ok", "order": result._asdict()}
 
+        if lot < info.volume_min or lot > info.volume_max or (lot % info.volume_step != 0):
+            mt5.shutdown()
+            raise RuntimeError(
+                f"Invalid lot {lot} for {symbol}. "
+                f"Allowed range: {info.volume_min} - {info.volume_max}, step {info.volume_step}"
+            )
+        order_type = mt5.ORDER_TYPE_BUY if trade_type == "buy" else mt5.ORDER_TYPE_SELL                
+        price = tick.ask if trade_type == "buy" else tick.bid
+        if tp:
+            tp = round(tp / info.point) * info.point
+            if trade_type == "buy" and tp <= price:
+                tp = price + info.point
+            elif trade_type == "sell" and tp >= price:
+                tp = price - info.point
+        if sl:
+            sl = round(sl / info.point) * info.point
+            if trade_type == "buy" and sl >= price:
+                sl = price - info.point
+            elif trade_type == "sell" and sl <= price:
+                sl = price + info.point        
+        # Coba beberapa filling mode yang umum didukung broker
+        filling_modes = [mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN, mt5.ORDER_FILLING_IOC]
+        last_error = None
+        for filling_mode in filling_modes:
+            req = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": lot,
+                "type": order_type,
+                "price": price,
+                "deviation": 20,
+                "magic": 0,
+                "comment": "",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": filling_mode,
+            }
+            if tp:
+                req["tp"] = tp
+            if sl:
+                req["sl"] = sl            
+            result = mt5.order_send(req)
+            if result.retcode == mt5.TRADE_RETCODE_DONE:
+                position = self._find_open_position(symbol, lot, trade_type)
+                ticket = getattr(position, "ticket", None) if position else None
+                entry_price = getattr(position, "price_open", None) if position else price
+                mt5.shutdown()
+                return {
+                    "status": "ok",
+                    "order": {
+                        **result._asdict(),
+                        "ticket": ticket or getattr(result, "order", None) or getattr(result, "deal", None),
+                        "price": entry_price,
+                        "symbol": symbol,
+                        "broker_name": self.broker_name,
+                        "account_id": account_id,
+                        "lot": lot,
+                        "trade_type": trade_type,
+                        "tp": tp,
+                        "sl": sl,
+                    },
+                }
+            else:
+                last_error = f"{result.retcode} {result.comment}"
+        mt5.shutdown()
+        error_msg = (
+            f"Order send failed on {symbol} "
+            f"(Broker: {self.broker_name}, Type: {trade_type}, Lot: {lot}, TP: {tp}, SL: {sl}, Price: {price}): {last_error}"
+        )   
+        log_mt5_error(error_msg, broker_name=self.broker_name, account_id=account_id)
+        raise RuntimeError(error_msg)
+    
     def close_trade(self, symbol: str, lot: float, ticket: int):
         if not self._initialize():
             raise RuntimeError("MT5 not connected")
+        account_id = self._current_account_id()
         position = mt5.positions_get(ticket=ticket)
         if not position:
             mt5.shutdown()
-            raise RuntimeError(f"No open position with ticket {ticket}")
+            error_msg = f"No open position with ticket {ticket} (Broker: {self.broker_name}, Symbol: {symbol})"
+            log_mt5_error({
+                "broker": self.broker_name,
+                "account_id": account_id,
+                "symbol": symbol,
+                "lot": lot,
+                "ticket": ticket,
+                "error": "Position not found",
+                "source": "backend"
+            })
+            raise RuntimeError(error_msg)
         pos = position[0]
         order_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
-        price = mt5.symbol_info_tick(symbol).bid if pos.type == mt5.POSITION_TYPE_BUY else mt5.symbol_info_tick(symbol).ask
+        tick = mt5.symbol_info_tick(symbol)
+        if not tick:
+            mt5.shutdown()
+            error_msg = f"No tick data for {symbol}"
+            log_mt5_error({
+                "broker": self.broker_name,
+                "account_id": account_id,
+                "symbol": symbol,
+                "lot": lot,
+                "ticket": ticket,
+                "error": "No tick data",
+                "source": "backend"
+            })
+            raise RuntimeError(error_msg)
+        price = tick.bid if pos.type == mt5.POSITION_TYPE_BUY else tick.ask
         req = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": symbol,
@@ -140,10 +243,24 @@ class MT5Adapter(TerminalAdapter):
         }
         result = mt5.order_send(req)
         mt5.shutdown()
+
         if result.retcode != mt5.TRADE_RETCODE_DONE:
-            log_mt5_error(f"[{self.broker_name}] close failed: {result.retcode} {result.comment}")
-            raise RuntimeError(f"Order close failed: {result.retcode} {result.comment}")
-        return {"status": "ok", "order": result._asdict()}
+            error_msg = (
+                f"Order close failed on {symbol} "
+                f"(Broker: {self.broker_name}, Ticket: {ticket}, Lot: {lot}): {result.retcode} {result.comment}"
+            )
+            log_mt5_error({
+                "broker": self.broker_name,
+                "account_id": account_id,
+                "symbol": symbol,
+                "lot": lot,
+                "ticket": ticket,
+                "error": f"{result.retcode} {result.comment}",
+                "source": "backend"
+            })
+            raise RuntimeError(error_msg)
+
+        return {"status": "ok", "order": {**result._asdict(), "account_id": account_id, "broker_name": self.broker_name}}
 
 
 class MouseAdapter(TerminalAdapter):
@@ -340,3 +457,379 @@ def get_broker_order_status_snapshot(broker, symbol: str = "XAUUSD"):
         "cached": False,
         "refreshing": True,
     }
+
+
+def normalize_lot_with_constraints(lot: float, constraints: dict):
+    """
+    Snap lot into broker-valid min/max/step boundaries.
+    Returns a normalized float lot.
+    """
+    if constraints is None:
+        return max(0.01, float(lot))
+
+    step = float(constraints.get("volume_step") or 0)
+    minimum = float(constraints.get("volume_min") or 0.01)
+    maximum = float(constraints.get("volume_max") or max(minimum, float(lot)))
+
+    value = float(lot)
+    if value < minimum:
+        value = minimum
+    if value > maximum:
+        value = maximum
+
+    if step > 0:
+        offset_steps = round((value - minimum) / step)
+        value = minimum + (offset_steps * step)
+        value = min(max(value, minimum), maximum)
+        decimals = 0
+        step_text = f"{step:.12f}".rstrip("0")
+        if "." in step_text:
+            decimals = len(step_text.split(".")[1])
+        value = round(value, min(max(decimals, 2), 8))
+
+    return value
+
+
+def get_broker_symbol_constraints(broker, symbol: str = "XAUUSD", auto_start: bool = True):
+    broker = broker or {}
+    platform = str(broker.get("platform", "mt5")).lower()
+    terminal_path = broker.get("terminal_path")
+    symbol = str(symbol or "XAUUSD").strip().upper() or "XAUUSD"
+
+    payload = {
+        "broker_id": broker.get("id"),
+        "broker_name": broker.get("name"),
+        "platform": platform,
+        "terminal_path": terminal_path,
+        "symbol": symbol,
+        "can_open_order": False,
+        "reason": "unknown",
+        "account_id": None,
+        "volume_min": None,
+        "volume_max": None,
+        "volume_step": None,
+        "volume_limit": None,
+        "digits": None,
+        "point": None,
+        "tick_size": None,
+        "tick_value": None,
+        "trade_stops_level": None,
+        "trade_freeze_level": None,
+        "trade_mode": None,
+        "spread": None,
+    }
+
+    if platform != "mt5":
+        payload["can_open_order"] = True
+        payload["reason"] = "non_mt5_platform"
+        return payload
+
+    if not terminal_path:
+        payload["reason"] = "terminal_path_missing"
+        return payload
+
+    if auto_start:
+        ensure_terminal_running(terminal_path)
+
+    initialized = False
+    try:
+        initialized = mt5.initialize(path=terminal_path)
+        if not initialized:
+            payload["reason"] = "mt5_initialize_failed"
+            return payload
+
+        account = mt5.account_info()
+        payload["account_id"] = int(getattr(account, "login", 0) or 0) or None
+
+        symbol_info = mt5.symbol_info(symbol)
+        if not symbol_info:
+            payload["reason"] = "symbol_not_found"
+            return payload
+
+        if not bool(getattr(symbol_info, "visible", False)):
+            mt5.symbol_select(symbol, True)
+            symbol_info = mt5.symbol_info(symbol)
+
+        tick = mt5.symbol_info_tick(symbol)
+        terminal_info = mt5.terminal_info()
+
+        payload.update(
+            {
+                "volume_min": float(getattr(symbol_info, "volume_min", 0) or 0),
+                "volume_max": float(getattr(symbol_info, "volume_max", 0) or 0),
+                "volume_step": float(getattr(symbol_info, "volume_step", 0) or 0),
+                "volume_limit": float(getattr(symbol_info, "volume_limit", 0) or 0),
+                "digits": int(getattr(symbol_info, "digits", 0) or 0),
+                "point": float(getattr(symbol_info, "point", 0) or 0),
+                "tick_size": float(getattr(symbol_info, "trade_tick_size", 0) or 0),
+                "tick_value": float(getattr(symbol_info, "trade_tick_value", 0) or 0),
+                "trade_stops_level": int(getattr(symbol_info, "trade_stops_level", 0) or 0),
+                "trade_freeze_level": int(getattr(symbol_info, "trade_freeze_level", 0) or 0),
+                "trade_mode": int(getattr(symbol_info, "trade_mode", 0) or 0),
+                "spread": int(getattr(symbol_info, "spread", 0) or 0),
+            }
+        )
+
+        terminal_connected = bool(getattr(terminal_info, "connected", False)) if terminal_info else False
+        terminal_trade_allowed = bool(getattr(terminal_info, "trade_allowed", False)) if terminal_info else False
+        account_trade_allowed = bool(getattr(account, "trade_allowed", False)) if account else False
+        has_tick = tick is not None
+
+        if not terminal_connected:
+            payload["reason"] = "terminal_disconnected"
+            return payload
+        if not terminal_trade_allowed:
+            payload["reason"] = "terminal_trade_disabled"
+            return payload
+        if not account_trade_allowed:
+            payload["reason"] = "account_trade_disabled"
+            return payload
+        if not has_tick:
+            payload["reason"] = "no_tick_data"
+            return payload
+
+        payload["can_open_order"] = True
+        payload["reason"] = "ready"
+        return payload
+    except Exception as exc:
+        payload["reason"] = f"constraints_failed: {exc}"
+        return payload
+    finally:
+        if initialized:
+            mt5.shutdown()
+
+
+def _mt5_account_id(account):
+    login = getattr(account, "login", None) if account else None
+    return int(login) if login is not None else None
+
+
+def _trade_type_from_position(position_type):
+    return "BUY" if position_type == mt5.POSITION_TYPE_BUY else "SELL"
+
+
+def _trade_type_from_deal(deal_type):
+    return "BUY" if deal_type == mt5.DEAL_TYPE_BUY else "SELL"
+
+
+def _weighted_price(deals):
+    total_volume = sum(float(getattr(deal, "volume", 0) or 0) for deal in deals)
+    if total_volume <= 0:
+        return None
+    total_value = sum(float(getattr(deal, "price", 0) or 0) * float(getattr(deal, "volume", 0) or 0) for deal in deals)
+    return total_value / total_volume
+
+
+def _derive_tp_sl_values(position):
+    entry = float(getattr(position, "price_open", 0) or 0)
+    if entry <= 0:
+        return None, None
+    tp_price = float(getattr(position, "tp", 0) or 0)
+    sl_price = float(getattr(position, "sl", 0) or 0)
+    tp_value = abs(tp_price - entry) if tp_price > 0 else None
+    sl_value = abs(sl_price - entry) if sl_price > 0 else None
+    return tp_value, sl_value
+
+
+def _sync_trade_id(broker_id, account_id, ticket):
+    return f"terminal-sync:{broker_id}:{account_id or 'unknown'}:{ticket}"
+
+
+def _group_deals_by_position(deals):
+    grouped = {}
+    for deal in deals or []:
+        position_id = int(getattr(deal, "position_id", 0) or 0)
+        if position_id <= 0:
+            continue
+        grouped.setdefault(position_id, []).append(deal)
+    for items in grouped.values():
+        items.sort(key=lambda deal: (int(getattr(deal, "time", 0) or 0), int(getattr(deal, "ticket", 0) or 0)))
+    return grouped
+
+
+def _build_open_trade_from_position(broker, account_id, position, deals_for_position=None):
+    tp_value, sl_value = _derive_tp_sl_values(position)
+    ticket = int(getattr(position, "ticket", 0) or 0)
+    entry_time = int(getattr(position, "time", 0) or 0) or int(time.time())
+    entry_price = float(getattr(position, "price_open", 0) or 0)
+    if (not entry_price) and deals_for_position:
+        entry_deals = [deal for deal in deals_for_position if getattr(deal, "entry", None) == mt5.DEAL_ENTRY_IN]
+        entry_price = _weighted_price(entry_deals) or entry_price
+        if not entry_time and entry_deals:
+            entry_time = int(getattr(entry_deals[0], "time", 0) or 0)
+    return {
+        "trade_id": _sync_trade_id(broker.get("id"), account_id, ticket),
+        "status": "open",
+        "type": _trade_type_from_position(getattr(position, "type", None)),
+        "symbol": getattr(position, "symbol", None),
+        "lot": float(getattr(position, "volume", 0) or 0),
+        "ticket": ticket,
+        "entry": entry_price,
+        "profit": float(getattr(position, "profit", 0) or 0),
+        "entryTime": entry_time,
+        "exitTime": None,
+        "reason": "terminal_sync_open",
+        "tpValue": tp_value,
+        "slValue": sl_value,
+        "broker_id": broker.get("id"),
+        "broker_name": broker.get("name"),
+        "account_id": account_id,
+        "platform": broker.get("platform"),
+        "execution_mode": broker.get("execution_mode"),
+        "terminal_path": broker.get("terminal_path"),
+    }
+
+
+def _build_closed_trade_from_deals(broker, account_id, ticket, deals_for_position):
+    entry_deals = [deal for deal in deals_for_position if getattr(deal, "entry", None) == mt5.DEAL_ENTRY_IN]
+    exit_values = {mt5.DEAL_ENTRY_OUT}
+    deal_entry_out_by = getattr(mt5, "DEAL_ENTRY_OUT_BY", None)
+    if deal_entry_out_by is not None:
+        exit_values.add(deal_entry_out_by)
+    exit_deals = [deal for deal in deals_for_position if getattr(deal, "entry", None) in exit_values]
+    if not entry_deals or not exit_deals:
+        return None
+
+    first_entry = entry_deals[0]
+    last_exit = exit_deals[-1]
+    return {
+        "trade_id": _sync_trade_id(broker.get("id"), account_id, ticket),
+        "status": "closed",
+        "type": _trade_type_from_deal(getattr(first_entry, "type", None)),
+        "symbol": getattr(first_entry, "symbol", None),
+        "lot": sum(float(getattr(deal, "volume", 0) or 0) for deal in entry_deals) or float(getattr(first_entry, "volume", 0) or 0),
+        "ticket": int(ticket),
+        "entry": _weighted_price(entry_deals),
+        "exit": _weighted_price(exit_deals),
+        "profit": sum(float(getattr(deal, "profit", 0) or 0) for deal in deals_for_position),
+        "entryTime": int(getattr(first_entry, "time", 0) or 0) or None,
+        "exitTime": int(getattr(last_exit, "time", 0) or 0) or None,
+        "reason": "terminal_sync_closed",
+        "tpValue": None,
+        "slValue": None,
+        "broker_id": broker.get("id"),
+        "broker_name": broker.get("name"),
+        "account_id": account_id,
+        "platform": broker.get("platform"),
+        "execution_mode": broker.get("execution_mode"),
+        "terminal_path": broker.get("terminal_path"),
+    }
+
+
+def sync_broker_trade_state(broker, history_days: Optional[int] = 90):
+    broker = broker or {}
+    if str(broker.get("platform", "mt5")).lower() != "mt5":
+        return {"broker_id": broker.get("id"), "synced": False, "reason": "non_mt5_platform"}
+
+    terminal_path = broker.get("terminal_path")
+    if not terminal_path:
+        return {"broker_id": broker.get("id"), "synced": False, "reason": "terminal_path_missing"}
+
+    ensure_terminal_running(terminal_path)
+    initialized = False
+    try:
+        initialized = mt5.initialize(path=terminal_path)
+        if not initialized:
+            log_mt5_error(
+                f"Failed to initialize MT5 for trade sync: {broker.get('name')}",
+                broker_id=broker.get("id"),
+                broker_name=broker.get("name"),
+            )
+            return {"broker_id": broker.get("id"), "synced": False, "reason": "mt5_initialize_failed"}
+
+        account = mt5.account_info()
+        account_id = _mt5_account_id(account)
+        positions = list(mt5.positions_get() or [])
+        if history_days is None:
+            from_date = datetime(1970, 1, 1)
+        else:
+            from_date = datetime.now() - timedelta(days=max(1, int(history_days)))
+        to_date = datetime.now() + timedelta(days=1)
+        deals = list(mt5.history_deals_get(from_date, to_date) or [])
+        deals_by_position = _group_deals_by_position(deals)
+        live_tickets = set()
+
+        for position in positions:
+            ticket = int(getattr(position, "ticket", 0) or 0)
+            if ticket <= 0:
+                continue
+            live_tickets.add(ticket)
+            upsert_trade_history_record(_build_open_trade_from_position(broker, account_id, position, deals_by_position.get(ticket, [])))
+
+        for ticket, deals_for_position in deals_by_position.items():
+            if ticket in live_tickets:
+                continue
+            summary = _build_closed_trade_from_deals(broker, account_id, ticket, deals_for_position)
+            if summary:
+                upsert_trade_history_record(summary)
+
+        for row in list_open_trades(broker_id=broker.get("id")):
+            row_account_id = row.get("account_id")
+            if account_id is not None and row_account_id not in (None, account_id):
+                continue
+            ticket = int(row.get("ticket") or 0)
+            if ticket > 0 and ticket in live_tickets:
+                continue
+
+            closed_summary = None
+            if ticket > 0:
+                closed_summary = _build_closed_trade_from_deals(broker, account_id, ticket, deals_by_position.get(ticket, []))
+            if closed_summary:
+                closed_summary["trade_id"] = row.get("trade_id") or closed_summary.get("trade_id")
+                closed_summary["tpValue"] = row.get("tpValue") if closed_summary.get("tpValue") is None else closed_summary.get("tpValue")
+                closed_summary["slValue"] = row.get("slValue") if closed_summary.get("slValue") is None else closed_summary.get("slValue")
+                upsert_trade_history_record(closed_summary)
+                continue
+
+            upsert_trade_history_record(
+                {
+                    "trade_id": row.get("trade_id") or _sync_trade_id(broker.get("id"), account_id, ticket or f"missing-{row.get('symbol')}-{row.get('entryTime') or 0}"),
+                    "status": "closed",
+                    "type": row.get("type"),
+                    "symbol": row.get("symbol"),
+                    "lot": row.get("lot"),
+                    "ticket": row.get("ticket"),
+                    "entry": row.get("entry"),
+                    "exit": row.get("exit"),
+                    "profit": row.get("profit"),
+                    "entryTime": row.get("entryTime"),
+                    "exitTime": int(time.time()),
+                    "reason": "terminal_sync_missing",
+                    "tpValue": row.get("tpValue"),
+                    "slValue": row.get("slValue"),
+                    "broker_id": broker.get("id"),
+                    "broker_name": broker.get("name"),
+                    "account_id": account_id,
+                    "platform": broker.get("platform"),
+                    "execution_mode": row.get("execution_mode") or broker.get("execution_mode"),
+                    "terminal_path": broker.get("terminal_path"),
+                }
+            )
+
+        return {
+            "broker_id": broker.get("id"),
+            "broker_name": broker.get("name"),
+            "account_id": account_id,
+            "synced": True,
+            "open_positions": len(live_tickets),
+            "history_deals": len(deals),
+        }
+    except Exception as exc:
+        log_mt5_error(
+            f"Terminal sync failed for broker {broker.get('name')}: {exc}",
+            broker_id=broker.get("id"),
+            broker_name=broker.get("name"),
+        )
+        return {"broker_id": broker.get("id"), "synced": False, "reason": str(exc)}
+    finally:
+        if initialized:
+            mt5.shutdown()
+
+
+def sync_all_terminal_trade_state(history_days: Optional[int] = 90):
+    results = []
+    for broker in list_brokers(include_inactive=False):
+        if str(broker.get("platform", "mt5")).lower() != "mt5":
+            continue
+        results.append(sync_broker_trade_state(broker, history_days=history_days))
+    return results

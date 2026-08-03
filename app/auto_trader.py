@@ -11,9 +11,16 @@ from .db import (
     list_brokers,
     list_open_trades,
     resolve_feed_broker,
+    save_account_state,
 )
 from .logic import analyze_symbol, fetch_ohlcv
-from .terminal_adapters import ensure_terminal_running, get_broker_adapter, probe_broker_order_status
+from .terminal_adapters import (
+    ensure_terminal_running,
+    get_broker_adapter,
+    get_broker_symbol_constraints,
+    normalize_lot_with_constraints,
+    probe_broker_order_status,
+)
 
 
 _loop_started = False
@@ -71,6 +78,10 @@ def _run_auto_trade_cycle():
     state = get_account_state()
     feed_broker = _get_feed_broker(state)
     symbol = "XAUUSD"
+    if feed_broker and feed_broker.get("default_symbol"):
+        symbol = str(feed_broker.get("default_symbol")).strip() or "XAUUSD"
+    elif state.get("auto_trade_symbol"):
+        symbol = str(state.get("auto_trade_symbol")).strip() or "XAUUSD"
     auto_open_broker, _ = _resolve_auto_open_broker(state, symbol)
 
     keep_alive = bool(state.get("keep_terminal_alive", True))
@@ -104,8 +115,15 @@ def _run_auto_trade_cycle():
         broker_status = probe_broker_order_status(broker, symbol=symbol, auto_start=True)
         if not broker_status.get("can_open_order"):
             return
+        lot_to_open = float(state.get("lot", 0.01))
+        constraints = get_broker_symbol_constraints(broker, symbol=symbol, auto_start=False)
+        if constraints.get("can_open_order") and constraints.get("volume_step"):
+            lot_to_open = normalize_lot_with_constraints(lot_to_open, constraints)
+            if abs(lot_to_open - float(state.get("lot", 0.01))) > 1e-9:
+                state["lot"] = lot_to_open
+                save_account_state(state)
         adapter, method = get_broker_adapter(broker, broker.get("execution_mode"))
-        result = adapter.open_trade(symbol, float(state.get("lot", 0.01)), signal)
+        result = adapter.open_trade(symbol, lot_to_open, signal)
         order = result.get("order", {})
         now = int(time.time())
         trade_id = str(uuid.uuid4())
@@ -121,7 +139,7 @@ def _run_auto_trade_cycle():
                 "trade_id": trade_id,
                 "type": signal.upper(),
                 "symbol": symbol,
-                "lot": float(state.get("lot", 0.01)),
+                "lot": lot_to_open,
                 "ticket": order.get("ticket"),
                 "entry": order.get("price"),
                 "entryTime": now,
@@ -197,7 +215,13 @@ def _auto_trade_loop():
             _run_auto_trade_cycle()
         except Exception:
             pass
-        time.sleep(2)
+        try:
+            state = get_account_state()
+            interval = float(state.get("auto_trade_interval_sec", 2) or 2)
+        except Exception:
+            interval = 2
+        interval = max(1.0, min(interval, 60.0))
+        time.sleep(interval)
 
 
 def start_auto_trader_thread():
