@@ -105,7 +105,7 @@ import time
 import threading
 from typing import Any
 # ta: Library technical analysis (indikator trading)
-from ta.volatility import BollingerBands
+from ta.volatility import BollingerBands, AverageTrueRange
 from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.trend import MACD, SMAIndicator
 
@@ -157,7 +157,7 @@ def fetch_ohlcv(symbol, timeframe, bars=100, terminal_path=None):
 # Fungsi: Hitung indikator teknikal dari data OHLCV
 # Menggunakan library ta (technical analysis)
 ###########################################################
-def calculate_indicators(df):
+def calculate_indicators(df, atr_period=14):
     result = {}
     # Bollinger Bands (indikator volatilitas)
     bb = BollingerBands(df['close'])
@@ -178,6 +178,9 @@ def calculate_indicators(df):
     # SMA (Simple Moving Average, rata-rata harga)
     sma = SMAIndicator(df['close'], window=14)
     result['sma'] = sma.sma_indicator().iloc[-1]
+    atr_window = max(2, int(atr_period or 14))
+    atr = AverageTrueRange(df['high'], df['low'], df['close'], window=atr_window)
+    result['atr'] = atr.average_true_range().iloc[-1]
     return result
 
 ###########################################################
@@ -208,14 +211,14 @@ def generate_signal(indicators, mode='real'):
 # Fungsi utama: Analisa multi-timeframe dan simulasi trading
 # Memanggil fetch_ohlcv dan calculate_indicators untuk tiap TF
 ###########################################################
-def analyze_symbol(symbol, bars=60, timeframes=None, mode='real', terminal_path=None):
+def analyze_symbol(symbol, bars=60, timeframes=None, mode='real', terminal_path=None, atr_period=14):
     timeframes = ['M1', 'M5', 'M15', 'M30']
     indicators = {}
     errors = {}
     for tf in timeframes:
         try:
             df = fetch_ohlcv(symbol, tf, terminal_path=terminal_path)
-            indicators[tf] = calculate_indicators(df)
+            indicators[tf] = calculate_indicators(df, atr_period=atr_period)
         except Exception as e:
             errors[tf] = str(e)
     if errors:

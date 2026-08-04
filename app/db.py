@@ -49,7 +49,42 @@ def init_db():
                 auto_trade_symbol TEXT DEFAULT 'XAUUSD',
                 auto_trade_interval_sec INTEGER DEFAULT 2,
                 trade_history_sync_days INTEGER DEFAULT 90,
-                trade_history_sync_all INTEGER DEFAULT 0
+                trade_history_sync_all INTEGER DEFAULT 0,
+                auto_trade_risk_mode TEXT DEFAULT 'fixed_lot',
+                auto_trade_risk_percent REAL DEFAULT 1.0,
+                auto_trade_use_account_balance INTEGER DEFAULT 1,
+                auto_trade_use_available_margin INTEGER DEFAULT 1,
+                auto_trade_min_free_margin_pct REAL DEFAULT 30,
+                auto_trade_max_margin_usage_pct REAL DEFAULT 70,
+                auto_trade_max_spread_points INTEGER DEFAULT 120,
+                auto_trade_min_signal_score REAL DEFAULT 0.55,
+                auto_trade_allow_sell INTEGER DEFAULT 1,
+                auto_trade_cooldown_sec INTEGER DEFAULT 30,
+                auto_trade_session_start_hour INTEGER DEFAULT 0,
+                auto_trade_session_end_hour INTEGER DEFAULT 24,
+                auto_trade_use_atr_tpsl INTEGER DEFAULT 1,
+                auto_trade_atr_period INTEGER DEFAULT 14,
+                auto_trade_atr_sl_mult REAL DEFAULT 1.5,
+                auto_trade_atr_tp_mult REAL DEFAULT 2.5,
+                auto_trade_trailing_enabled INTEGER DEFAULT 1,
+                auto_trade_trailing_activation_rr REAL DEFAULT 1.0,
+                auto_trade_trailing_atr_mult REAL DEFAULT 1.0,
+                auto_trade_confidence_model TEXT DEFAULT 'weighted',
+                auto_trade_confidence_threshold REAL DEFAULT 0.6,
+                auto_trade_tf_weight_m1 REAL DEFAULT 0.35,
+                auto_trade_tf_weight_m5 REAL DEFAULT 0.30,
+                auto_trade_tf_weight_m15 REAL DEFAULT 0.20,
+                auto_trade_tf_weight_m30 REAL DEFAULT 0.15,
+                auto_trade_partial_tp_enabled INTEGER DEFAULT 1,
+                auto_trade_partial_tp_rr1 REAL DEFAULT 1.0,
+                auto_trade_partial_tp_close_pct1 REAL DEFAULT 40.0,
+                auto_trade_partial_tp_rr2 REAL DEFAULT 2.0,
+                auto_trade_partial_tp_close_pct2 REAL DEFAULT 35.0,
+                auto_trade_break_even_enabled INTEGER DEFAULT 1,
+                auto_trade_break_even_rr REAL DEFAULT 1.0,
+                auto_trade_break_even_offset_atr_mult REAL DEFAULT 0.1,
+                auto_trade_trailing_mode TEXT DEFAULT 'stateful_hl',
+                auto_trade_stateful_trail_buffer_atr_mult REAL DEFAULT 0.5
             )
             """
         )
@@ -60,6 +95,41 @@ def init_db():
         _add_column_if_missing(conn, "account_state", "auto_trade_interval_sec", "INTEGER DEFAULT 2")
         _add_column_if_missing(conn, "account_state", "trade_history_sync_days", "INTEGER DEFAULT 90")
         _add_column_if_missing(conn, "account_state", "trade_history_sync_all", "INTEGER DEFAULT 0")
+        _add_column_if_missing(conn, "account_state", "auto_trade_risk_mode", "TEXT DEFAULT 'fixed_lot'")
+        _add_column_if_missing(conn, "account_state", "auto_trade_risk_percent", "REAL DEFAULT 1.0")
+        _add_column_if_missing(conn, "account_state", "auto_trade_use_account_balance", "INTEGER DEFAULT 1")
+        _add_column_if_missing(conn, "account_state", "auto_trade_use_available_margin", "INTEGER DEFAULT 1")
+        _add_column_if_missing(conn, "account_state", "auto_trade_min_free_margin_pct", "REAL DEFAULT 30")
+        _add_column_if_missing(conn, "account_state", "auto_trade_max_margin_usage_pct", "REAL DEFAULT 70")
+        _add_column_if_missing(conn, "account_state", "auto_trade_max_spread_points", "INTEGER DEFAULT 120")
+        _add_column_if_missing(conn, "account_state", "auto_trade_min_signal_score", "REAL DEFAULT 0.55")
+        _add_column_if_missing(conn, "account_state", "auto_trade_allow_sell", "INTEGER DEFAULT 1")
+        _add_column_if_missing(conn, "account_state", "auto_trade_cooldown_sec", "INTEGER DEFAULT 30")
+        _add_column_if_missing(conn, "account_state", "auto_trade_session_start_hour", "INTEGER DEFAULT 0")
+        _add_column_if_missing(conn, "account_state", "auto_trade_session_end_hour", "INTEGER DEFAULT 24")
+        _add_column_if_missing(conn, "account_state", "auto_trade_use_atr_tpsl", "INTEGER DEFAULT 1")
+        _add_column_if_missing(conn, "account_state", "auto_trade_atr_period", "INTEGER DEFAULT 14")
+        _add_column_if_missing(conn, "account_state", "auto_trade_atr_sl_mult", "REAL DEFAULT 1.5")
+        _add_column_if_missing(conn, "account_state", "auto_trade_atr_tp_mult", "REAL DEFAULT 2.5")
+        _add_column_if_missing(conn, "account_state", "auto_trade_trailing_enabled", "INTEGER DEFAULT 1")
+        _add_column_if_missing(conn, "account_state", "auto_trade_trailing_activation_rr", "REAL DEFAULT 1.0")
+        _add_column_if_missing(conn, "account_state", "auto_trade_trailing_atr_mult", "REAL DEFAULT 1.0")
+        _add_column_if_missing(conn, "account_state", "auto_trade_confidence_model", "TEXT DEFAULT 'weighted'")
+        _add_column_if_missing(conn, "account_state", "auto_trade_confidence_threshold", "REAL DEFAULT 0.6")
+        _add_column_if_missing(conn, "account_state", "auto_trade_tf_weight_m1", "REAL DEFAULT 0.35")
+        _add_column_if_missing(conn, "account_state", "auto_trade_tf_weight_m5", "REAL DEFAULT 0.30")
+        _add_column_if_missing(conn, "account_state", "auto_trade_tf_weight_m15", "REAL DEFAULT 0.20")
+        _add_column_if_missing(conn, "account_state", "auto_trade_tf_weight_m30", "REAL DEFAULT 0.15")
+        _add_column_if_missing(conn, "account_state", "auto_trade_partial_tp_enabled", "INTEGER DEFAULT 1")
+        _add_column_if_missing(conn, "account_state", "auto_trade_partial_tp_rr1", "REAL DEFAULT 1.0")
+        _add_column_if_missing(conn, "account_state", "auto_trade_partial_tp_close_pct1", "REAL DEFAULT 40.0")
+        _add_column_if_missing(conn, "account_state", "auto_trade_partial_tp_rr2", "REAL DEFAULT 2.0")
+        _add_column_if_missing(conn, "account_state", "auto_trade_partial_tp_close_pct2", "REAL DEFAULT 35.0")
+        _add_column_if_missing(conn, "account_state", "auto_trade_break_even_enabled", "INTEGER DEFAULT 1")
+        _add_column_if_missing(conn, "account_state", "auto_trade_break_even_rr", "REAL DEFAULT 1.0")
+        _add_column_if_missing(conn, "account_state", "auto_trade_break_even_offset_atr_mult", "REAL DEFAULT 0.1")
+        _add_column_if_missing(conn, "account_state", "auto_trade_trailing_mode", "TEXT DEFAULT 'stateful_hl'")
+        _add_column_if_missing(conn, "account_state", "auto_trade_stateful_trail_buffer_atr_mult", "REAL DEFAULT 0.5")
         conn.execute(
             """
             INSERT INTO account_state (
@@ -67,9 +137,28 @@ def init_db():
                 keep_terminal_alive, data_feed_broker_id,
                 auto_analytic_tpsl, tp_value, sl_value, lot, max_open_trades,
                 auto_trade_symbol, auto_trade_interval_sec,
-                trade_history_sync_days, trade_history_sync_all
+                trade_history_sync_days, trade_history_sync_all,
+                auto_trade_risk_mode, auto_trade_risk_percent,
+                auto_trade_use_account_balance, auto_trade_use_available_margin,
+                auto_trade_min_free_margin_pct, auto_trade_max_margin_usage_pct,
+                auto_trade_max_spread_points, auto_trade_min_signal_score,
+                auto_trade_allow_sell, auto_trade_cooldown_sec,
+                auto_trade_session_start_hour, auto_trade_session_end_hour,
+                auto_trade_use_atr_tpsl, auto_trade_atr_period,
+                auto_trade_atr_sl_mult, auto_trade_atr_tp_mult,
+                auto_trade_trailing_enabled, auto_trade_trailing_activation_rr,
+                auto_trade_trailing_atr_mult, auto_trade_confidence_model,
+                auto_trade_confidence_threshold,
+                auto_trade_tf_weight_m1, auto_trade_tf_weight_m5,
+                auto_trade_tf_weight_m15, auto_trade_tf_weight_m30,
+                auto_trade_partial_tp_enabled,
+                auto_trade_partial_tp_rr1, auto_trade_partial_tp_close_pct1,
+                auto_trade_partial_tp_rr2, auto_trade_partial_tp_close_pct2,
+                auto_trade_break_even_enabled,
+                auto_trade_break_even_rr, auto_trade_break_even_offset_atr_mult,
+                auto_trade_trailing_mode, auto_trade_stateful_trail_buffer_atr_mult
             )
-            VALUES (1, 1000, 1000, 0, 0, 1, NULL, 0, 0.5, NULL, 0.01, 1, 'XAUUSD', 2, 90, 0)
+            VALUES (1, 1000, 1000, 0, 0, 1, NULL, 0, 0.5, NULL, 0.01, 1, 'XAUUSD', 2, 90, 0, 'fixed_lot', 1.0, 1, 1, 30, 70, 120, 0.55, 1, 30, 0, 24, 1, 14, 1.5, 2.5, 1, 1.0, 1.0, 'weighted', 0.6, 0.35, 0.30, 0.20, 0.15, 1, 1.0, 40.0, 2.0, 35.0, 1, 1.0, 0.1, 'stateful_hl', 0.5)
             ON CONFLICT(id) DO NOTHING
             """
         )
@@ -269,7 +358,26 @@ def get_account_state():
                      auto_trade_enabled, keep_terminal_alive, data_feed_broker_id,
                      tp_value, sl_value, lot, max_open_trades,
                      auto_trade_symbol, auto_trade_interval_sec,
-                     trade_history_sync_days, trade_history_sync_all
+                     trade_history_sync_days, trade_history_sync_all,
+                     auto_trade_risk_mode, auto_trade_risk_percent,
+                     auto_trade_use_account_balance, auto_trade_use_available_margin,
+                     auto_trade_min_free_margin_pct, auto_trade_max_margin_usage_pct,
+                     auto_trade_max_spread_points, auto_trade_min_signal_score,
+                     auto_trade_allow_sell, auto_trade_cooldown_sec,
+                     auto_trade_session_start_hour, auto_trade_session_end_hour,
+                     auto_trade_use_atr_tpsl, auto_trade_atr_period,
+                     auto_trade_atr_sl_mult, auto_trade_atr_tp_mult,
+                     auto_trade_trailing_enabled, auto_trade_trailing_activation_rr,
+                     auto_trade_trailing_atr_mult, auto_trade_confidence_model,
+                     auto_trade_confidence_threshold,
+                     auto_trade_tf_weight_m1, auto_trade_tf_weight_m5,
+                     auto_trade_tf_weight_m15, auto_trade_tf_weight_m30,
+                     auto_trade_partial_tp_enabled,
+                     auto_trade_partial_tp_rr1, auto_trade_partial_tp_close_pct1,
+                     auto_trade_partial_tp_rr2, auto_trade_partial_tp_close_pct2,
+                     auto_trade_break_even_enabled,
+                     auto_trade_break_even_rr, auto_trade_break_even_offset_atr_mult,
+                     auto_trade_trailing_mode, auto_trade_stateful_trail_buffer_atr_mult
             FROM account_state
             WHERE id = 1
             """
@@ -291,6 +399,41 @@ def get_account_state():
                 "auto_trade_interval_sec": 2,
                 "trade_history_sync_days": 90,
                 "trade_history_sync_all": False,
+                "auto_trade_risk_mode": "fixed_lot",
+                "auto_trade_risk_percent": 1.0,
+                "auto_trade_use_account_balance": True,
+                "auto_trade_use_available_margin": True,
+                "auto_trade_min_free_margin_pct": 30.0,
+                "auto_trade_max_margin_usage_pct": 70.0,
+                "auto_trade_max_spread_points": 120,
+                "auto_trade_min_signal_score": 0.55,
+                "auto_trade_allow_sell": True,
+                "auto_trade_cooldown_sec": 30,
+                "auto_trade_session_start_hour": 0,
+                "auto_trade_session_end_hour": 24,
+                "auto_trade_use_atr_tpsl": True,
+                "auto_trade_atr_period": 14,
+                "auto_trade_atr_sl_mult": 1.5,
+                "auto_trade_atr_tp_mult": 2.5,
+                "auto_trade_trailing_enabled": True,
+                "auto_trade_trailing_activation_rr": 1.0,
+                "auto_trade_trailing_atr_mult": 1.0,
+                "auto_trade_confidence_model": "weighted",
+                "auto_trade_confidence_threshold": 0.6,
+                "auto_trade_tf_weight_m1": 0.35,
+                "auto_trade_tf_weight_m5": 0.30,
+                "auto_trade_tf_weight_m15": 0.20,
+                "auto_trade_tf_weight_m30": 0.15,
+                "auto_trade_partial_tp_enabled": True,
+                "auto_trade_partial_tp_rr1": 1.0,
+                "auto_trade_partial_tp_close_pct1": 40.0,
+                "auto_trade_partial_tp_rr2": 2.0,
+                "auto_trade_partial_tp_close_pct2": 35.0,
+                "auto_trade_break_even_enabled": True,
+                "auto_trade_break_even_rr": 1.0,
+                "auto_trade_break_even_offset_atr_mult": 0.1,
+                "auto_trade_trailing_mode": "stateful_hl",
+                "auto_trade_stateful_trail_buffer_atr_mult": 0.5,
                 "history": [],
             }
         transactions = get_account_transactions(limit=200)
@@ -310,6 +453,41 @@ def get_account_state():
             "auto_trade_interval_sec": row["auto_trade_interval_sec"] if row["auto_trade_interval_sec"] is not None else 2,
             "trade_history_sync_days": row["trade_history_sync_days"] if row["trade_history_sync_days"] is not None else 90,
             "trade_history_sync_all": bool(row["trade_history_sync_all"]),
+            "auto_trade_risk_mode": (row["auto_trade_risk_mode"] or "fixed_lot"),
+            "auto_trade_risk_percent": float(row["auto_trade_risk_percent"] if row["auto_trade_risk_percent"] is not None else 1.0),
+            "auto_trade_use_account_balance": bool(row["auto_trade_use_account_balance"]),
+            "auto_trade_use_available_margin": bool(row["auto_trade_use_available_margin"]),
+            "auto_trade_min_free_margin_pct": float(row["auto_trade_min_free_margin_pct"] if row["auto_trade_min_free_margin_pct"] is not None else 30.0),
+            "auto_trade_max_margin_usage_pct": float(row["auto_trade_max_margin_usage_pct"] if row["auto_trade_max_margin_usage_pct"] is not None else 70.0),
+            "auto_trade_max_spread_points": int(row["auto_trade_max_spread_points"] if row["auto_trade_max_spread_points"] is not None else 120),
+            "auto_trade_min_signal_score": float(row["auto_trade_min_signal_score"] if row["auto_trade_min_signal_score"] is not None else 0.55),
+            "auto_trade_allow_sell": bool(row["auto_trade_allow_sell"]),
+            "auto_trade_cooldown_sec": int(row["auto_trade_cooldown_sec"] if row["auto_trade_cooldown_sec"] is not None else 30),
+            "auto_trade_session_start_hour": int(row["auto_trade_session_start_hour"] if row["auto_trade_session_start_hour"] is not None else 0),
+            "auto_trade_session_end_hour": int(row["auto_trade_session_end_hour"] if row["auto_trade_session_end_hour"] is not None else 24),
+            "auto_trade_use_atr_tpsl": bool(row["auto_trade_use_atr_tpsl"]),
+            "auto_trade_atr_period": int(row["auto_trade_atr_period"] if row["auto_trade_atr_period"] is not None else 14),
+            "auto_trade_atr_sl_mult": float(row["auto_trade_atr_sl_mult"] if row["auto_trade_atr_sl_mult"] is not None else 1.5),
+            "auto_trade_atr_tp_mult": float(row["auto_trade_atr_tp_mult"] if row["auto_trade_atr_tp_mult"] is not None else 2.5),
+            "auto_trade_trailing_enabled": bool(row["auto_trade_trailing_enabled"]),
+            "auto_trade_trailing_activation_rr": float(row["auto_trade_trailing_activation_rr"] if row["auto_trade_trailing_activation_rr"] is not None else 1.0),
+            "auto_trade_trailing_atr_mult": float(row["auto_trade_trailing_atr_mult"] if row["auto_trade_trailing_atr_mult"] is not None else 1.0),
+            "auto_trade_confidence_model": (row["auto_trade_confidence_model"] or "weighted"),
+            "auto_trade_confidence_threshold": float(row["auto_trade_confidence_threshold"] if row["auto_trade_confidence_threshold"] is not None else 0.6),
+            "auto_trade_tf_weight_m1": float(row["auto_trade_tf_weight_m1"] if row["auto_trade_tf_weight_m1"] is not None else 0.35),
+            "auto_trade_tf_weight_m5": float(row["auto_trade_tf_weight_m5"] if row["auto_trade_tf_weight_m5"] is not None else 0.30),
+            "auto_trade_tf_weight_m15": float(row["auto_trade_tf_weight_m15"] if row["auto_trade_tf_weight_m15"] is not None else 0.20),
+            "auto_trade_tf_weight_m30": float(row["auto_trade_tf_weight_m30"] if row["auto_trade_tf_weight_m30"] is not None else 0.15),
+            "auto_trade_partial_tp_enabled": bool(row["auto_trade_partial_tp_enabled"]),
+            "auto_trade_partial_tp_rr1": float(row["auto_trade_partial_tp_rr1"] if row["auto_trade_partial_tp_rr1"] is not None else 1.0),
+            "auto_trade_partial_tp_close_pct1": float(row["auto_trade_partial_tp_close_pct1"] if row["auto_trade_partial_tp_close_pct1"] is not None else 40.0),
+            "auto_trade_partial_tp_rr2": float(row["auto_trade_partial_tp_rr2"] if row["auto_trade_partial_tp_rr2"] is not None else 2.0),
+            "auto_trade_partial_tp_close_pct2": float(row["auto_trade_partial_tp_close_pct2"] if row["auto_trade_partial_tp_close_pct2"] is not None else 35.0),
+            "auto_trade_break_even_enabled": bool(row["auto_trade_break_even_enabled"]),
+            "auto_trade_break_even_rr": float(row["auto_trade_break_even_rr"] if row["auto_trade_break_even_rr"] is not None else 1.0),
+            "auto_trade_break_even_offset_atr_mult": float(row["auto_trade_break_even_offset_atr_mult"] if row["auto_trade_break_even_offset_atr_mult"] is not None else 0.1),
+            "auto_trade_trailing_mode": (row["auto_trade_trailing_mode"] or "stateful_hl"),
+            "auto_trade_stateful_trail_buffer_atr_mult": float(row["auto_trade_stateful_trail_buffer_atr_mult"] if row["auto_trade_stateful_trail_buffer_atr_mult"] is not None else 0.5),
             "history": transactions,
         }
 
@@ -323,9 +501,28 @@ def save_account_state(state):
                 keep_terminal_alive, data_feed_broker_id,
                 auto_analytic_tpsl, tp_value, sl_value, lot, max_open_trades,
                 auto_trade_symbol, auto_trade_interval_sec,
-                trade_history_sync_days, trade_history_sync_all
+                trade_history_sync_days, trade_history_sync_all,
+                auto_trade_risk_mode, auto_trade_risk_percent,
+                auto_trade_use_account_balance, auto_trade_use_available_margin,
+                auto_trade_min_free_margin_pct, auto_trade_max_margin_usage_pct,
+                auto_trade_max_spread_points, auto_trade_min_signal_score,
+                auto_trade_allow_sell, auto_trade_cooldown_sec,
+                auto_trade_session_start_hour, auto_trade_session_end_hour,
+                auto_trade_use_atr_tpsl, auto_trade_atr_period,
+                auto_trade_atr_sl_mult, auto_trade_atr_tp_mult,
+                auto_trade_trailing_enabled, auto_trade_trailing_activation_rr,
+                auto_trade_trailing_atr_mult, auto_trade_confidence_model,
+                auto_trade_confidence_threshold,
+                auto_trade_tf_weight_m1, auto_trade_tf_weight_m5,
+                auto_trade_tf_weight_m15, auto_trade_tf_weight_m30,
+                auto_trade_partial_tp_enabled,
+                auto_trade_partial_tp_rr1, auto_trade_partial_tp_close_pct1,
+                auto_trade_partial_tp_rr2, auto_trade_partial_tp_close_pct2,
+                auto_trade_break_even_enabled,
+                auto_trade_break_even_rr, auto_trade_break_even_offset_atr_mult,
+                auto_trade_trailing_mode, auto_trade_stateful_trail_buffer_atr_mult
             )
-            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 balance = excluded.balance,
                 initial_balance = excluded.initial_balance,
@@ -341,7 +538,42 @@ def save_account_state(state):
                 auto_trade_symbol = excluded.auto_trade_symbol,
                 auto_trade_interval_sec = excluded.auto_trade_interval_sec,
                 trade_history_sync_days = excluded.trade_history_sync_days,
-                trade_history_sync_all = excluded.trade_history_sync_all
+                trade_history_sync_all = excluded.trade_history_sync_all,
+                auto_trade_risk_mode = excluded.auto_trade_risk_mode,
+                auto_trade_risk_percent = excluded.auto_trade_risk_percent,
+                auto_trade_use_account_balance = excluded.auto_trade_use_account_balance,
+                auto_trade_use_available_margin = excluded.auto_trade_use_available_margin,
+                auto_trade_min_free_margin_pct = excluded.auto_trade_min_free_margin_pct,
+                auto_trade_max_margin_usage_pct = excluded.auto_trade_max_margin_usage_pct,
+                auto_trade_max_spread_points = excluded.auto_trade_max_spread_points,
+                auto_trade_min_signal_score = excluded.auto_trade_min_signal_score,
+                auto_trade_allow_sell = excluded.auto_trade_allow_sell,
+                auto_trade_cooldown_sec = excluded.auto_trade_cooldown_sec,
+                auto_trade_session_start_hour = excluded.auto_trade_session_start_hour,
+                auto_trade_session_end_hour = excluded.auto_trade_session_end_hour,
+                auto_trade_use_atr_tpsl = excluded.auto_trade_use_atr_tpsl,
+                auto_trade_atr_period = excluded.auto_trade_atr_period,
+                auto_trade_atr_sl_mult = excluded.auto_trade_atr_sl_mult,
+                auto_trade_atr_tp_mult = excluded.auto_trade_atr_tp_mult,
+                auto_trade_trailing_enabled = excluded.auto_trade_trailing_enabled,
+                auto_trade_trailing_activation_rr = excluded.auto_trade_trailing_activation_rr,
+                auto_trade_trailing_atr_mult = excluded.auto_trade_trailing_atr_mult,
+                auto_trade_confidence_model = excluded.auto_trade_confidence_model,
+                auto_trade_confidence_threshold = excluded.auto_trade_confidence_threshold,
+                auto_trade_tf_weight_m1 = excluded.auto_trade_tf_weight_m1,
+                auto_trade_tf_weight_m5 = excluded.auto_trade_tf_weight_m5,
+                auto_trade_tf_weight_m15 = excluded.auto_trade_tf_weight_m15,
+                auto_trade_tf_weight_m30 = excluded.auto_trade_tf_weight_m30,
+                auto_trade_partial_tp_enabled = excluded.auto_trade_partial_tp_enabled,
+                auto_trade_partial_tp_rr1 = excluded.auto_trade_partial_tp_rr1,
+                auto_trade_partial_tp_close_pct1 = excluded.auto_trade_partial_tp_close_pct1,
+                auto_trade_partial_tp_rr2 = excluded.auto_trade_partial_tp_rr2,
+                auto_trade_partial_tp_close_pct2 = excluded.auto_trade_partial_tp_close_pct2,
+                auto_trade_break_even_enabled = excluded.auto_trade_break_even_enabled,
+                auto_trade_break_even_rr = excluded.auto_trade_break_even_rr,
+                auto_trade_break_even_offset_atr_mult = excluded.auto_trade_break_even_offset_atr_mult,
+                auto_trade_trailing_mode = excluded.auto_trade_trailing_mode,
+                auto_trade_stateful_trail_buffer_atr_mult = excluded.auto_trade_stateful_trail_buffer_atr_mult
             """,
             (
                 state.get("balance", 1000),
@@ -359,6 +591,41 @@ def save_account_state(state):
                 state.get("auto_trade_interval_sec", 2),
                 state.get("trade_history_sync_days", 90),
                 int(bool(state.get("trade_history_sync_all", False))),
+                state.get("auto_trade_risk_mode", "fixed_lot"),
+                state.get("auto_trade_risk_percent", 1.0),
+                int(bool(state.get("auto_trade_use_account_balance", True))),
+                int(bool(state.get("auto_trade_use_available_margin", True))),
+                state.get("auto_trade_min_free_margin_pct", 30.0),
+                state.get("auto_trade_max_margin_usage_pct", 70.0),
+                state.get("auto_trade_max_spread_points", 120),
+                state.get("auto_trade_min_signal_score", 0.55),
+                int(bool(state.get("auto_trade_allow_sell", True))),
+                state.get("auto_trade_cooldown_sec", 30),
+                state.get("auto_trade_session_start_hour", 0),
+                state.get("auto_trade_session_end_hour", 24),
+                int(bool(state.get("auto_trade_use_atr_tpsl", True))),
+                state.get("auto_trade_atr_period", 14),
+                state.get("auto_trade_atr_sl_mult", 1.5),
+                state.get("auto_trade_atr_tp_mult", 2.5),
+                int(bool(state.get("auto_trade_trailing_enabled", True))),
+                state.get("auto_trade_trailing_activation_rr", 1.0),
+                state.get("auto_trade_trailing_atr_mult", 1.0),
+                state.get("auto_trade_confidence_model", "weighted"),
+                state.get("auto_trade_confidence_threshold", 0.6),
+                state.get("auto_trade_tf_weight_m1", 0.35),
+                state.get("auto_trade_tf_weight_m5", 0.30),
+                state.get("auto_trade_tf_weight_m15", 0.20),
+                state.get("auto_trade_tf_weight_m30", 0.15),
+                int(bool(state.get("auto_trade_partial_tp_enabled", True))),
+                state.get("auto_trade_partial_tp_rr1", 1.0),
+                state.get("auto_trade_partial_tp_close_pct1", 40.0),
+                state.get("auto_trade_partial_tp_rr2", 2.0),
+                state.get("auto_trade_partial_tp_close_pct2", 35.0),
+                int(bool(state.get("auto_trade_break_even_enabled", True))),
+                state.get("auto_trade_break_even_rr", 1.0),
+                state.get("auto_trade_break_even_offset_atr_mult", 0.1),
+                state.get("auto_trade_trailing_mode", "stateful_hl"),
+                state.get("auto_trade_stateful_trail_buffer_atr_mult", 0.5),
             ),
         )
 
@@ -727,6 +994,91 @@ def update_open_trade_tpsl(trade_id, tp_value=None, sl_value=None):
             (tp_value, sl_value, trade_id),
         )
     return cur.rowcount > 0
+
+
+def apply_partial_close_record(trade_id, *, closed_lot, exit_price=None, profit=None, exit_time=None, reason="partial_take_profit"):
+    ts = int(exit_time or time.time())
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT trade_id, type, symbol, lot, ticket, entry, entryTime,
+                   tpValue, slValue, broker_id, broker_name, account_id,
+                   platform, execution_mode, terminal_path
+            FROM trade_history
+            WHERE trade_id = ? AND status = 'open'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (trade_id,),
+        ).fetchone()
+        if not row:
+            return False
+
+        current_lot = float(row["lot"] or 0)
+        lot_to_close = max(0.0, min(float(closed_lot or 0), current_lot))
+        if lot_to_close <= 0:
+            return False
+
+        remaining_lot = max(0.0, current_lot - lot_to_close)
+
+        conn.execute(
+            """
+            INSERT INTO trade_history (
+                trade_id, status, type, symbol, lot, ticket,
+                entry, exit, profit, entryTime, exitTime, reason,
+                tpValue, slValue, broker_id, broker_name, account_id,
+                platform, execution_mode, terminal_path
+            )
+            VALUES (?, 'closed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"{trade_id}:partial:{ts}",
+                row["type"],
+                row["symbol"],
+                lot_to_close,
+                row["ticket"],
+                row["entry"],
+                exit_price,
+                profit,
+                row["entryTime"],
+                ts,
+                reason,
+                row["tpValue"],
+                row["slValue"],
+                row["broker_id"],
+                row["broker_name"],
+                row["account_id"],
+                row["platform"],
+                row["execution_mode"],
+                row["terminal_path"],
+            ),
+        )
+
+        if remaining_lot <= 1e-9:
+            conn.execute(
+                """
+                UPDATE trade_history
+                SET status = 'closed',
+                    exit = COALESCE(?, exit),
+                    profit = COALESCE(?, profit),
+                    exitTime = ?,
+                    reason = ?
+                WHERE trade_id = ? AND status = 'open'
+                """,
+                (exit_price, profit, ts, reason, trade_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE trade_history
+                SET lot = ?,
+                    reason = ?
+                WHERE trade_id = ? AND status = 'open'
+                """,
+                (remaining_lot, reason, trade_id),
+            )
+
+        return True
 
 
 def get_open_trades_count():

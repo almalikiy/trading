@@ -599,6 +599,129 @@ def get_broker_symbol_constraints(broker, symbol: str = "XAUUSD", auto_start: bo
             mt5.shutdown()
 
 
+def get_broker_account_metrics(broker, symbol: str = "XAUUSD", auto_start: bool = True):
+    broker = broker or {}
+    platform = str(broker.get("platform", "mt5")).lower()
+    terminal_path = broker.get("terminal_path")
+    symbol = str(symbol or "XAUUSD").strip().upper() or "XAUUSD"
+
+    payload = {
+        "broker_id": broker.get("id"),
+        "broker_name": broker.get("name"),
+        "platform": platform,
+        "symbol": symbol,
+        "can_trade": False,
+        "reason": "unknown",
+        "account_id": None,
+        "balance": None,
+        "equity": None,
+        "margin": None,
+        "margin_free": None,
+        "margin_level": None,
+        "leverage": None,
+        "currency": None,
+        "terminal_connected": False,
+        "terminal_trade_allowed": False,
+        "account_trade_allowed": False,
+        "spread_points": None,
+        "point": None,
+        "tick_size": None,
+        "tick_value": None,
+        "contract_size": None,
+        "estimated_margin_per_lot": None,
+    }
+
+    if platform != "mt5":
+        payload["can_trade"] = True
+        payload["reason"] = "non_mt5_platform"
+        return payload
+
+    if not terminal_path:
+        payload["reason"] = "terminal_path_missing"
+        return payload
+
+    if auto_start:
+        ensure_terminal_running(terminal_path)
+
+    initialized = False
+    try:
+        initialized = mt5.initialize(path=terminal_path)
+        if not initialized:
+            payload["reason"] = "mt5_initialize_failed"
+            return payload
+
+        account = mt5.account_info()
+        terminal_info = mt5.terminal_info()
+        symbol_info = mt5.symbol_info(symbol)
+        if symbol_info and not bool(getattr(symbol_info, "visible", False)):
+            mt5.symbol_select(symbol, True)
+            symbol_info = mt5.symbol_info(symbol)
+        tick = mt5.symbol_info_tick(symbol)
+
+        payload["terminal_connected"] = bool(getattr(terminal_info, "connected", False)) if terminal_info else False
+        payload["terminal_trade_allowed"] = bool(getattr(terminal_info, "trade_allowed", False)) if terminal_info else False
+        payload["account_trade_allowed"] = bool(getattr(account, "trade_allowed", False)) if account else False
+
+        payload["account_id"] = int(getattr(account, "login", 0) or 0) or None
+        payload["balance"] = float(getattr(account, "balance", 0) or 0) if account else None
+        payload["equity"] = float(getattr(account, "equity", 0) or 0) if account else None
+        payload["margin"] = float(getattr(account, "margin", 0) or 0) if account else None
+        payload["margin_free"] = float(getattr(account, "margin_free", 0) or 0) if account else None
+        payload["margin_level"] = float(getattr(account, "margin_level", 0) or 0) if account else None
+        payload["leverage"] = int(getattr(account, "leverage", 0) or 0) if account else None
+        payload["currency"] = getattr(account, "currency", None) if account else None
+
+        point = float(getattr(symbol_info, "point", 0) or 0) if symbol_info else 0.0
+        ask = float(getattr(tick, "ask", 0) or 0) if tick else 0.0
+        bid = float(getattr(tick, "bid", 0) or 0) if tick else 0.0
+        spread_points = None
+        if point > 0 and ask > 0 and bid > 0:
+            spread_points = int(round((ask - bid) / point))
+        elif symbol_info is not None:
+            spread_points = int(getattr(symbol_info, "spread", 0) or 0)
+
+        contract_size = float(getattr(symbol_info, "trade_contract_size", 0) or 0) if symbol_info else 0.0
+        leverage = int(payload["leverage"] or 0)
+        ref_price = ask if ask > 0 else bid
+        estimated_margin_per_lot = None
+        if contract_size > 0 and leverage > 0 and ref_price > 0:
+            estimated_margin_per_lot = contract_size * ref_price / leverage
+
+        payload.update(
+            {
+                "spread_points": spread_points,
+                "point": point if point > 0 else None,
+                "tick_size": float(getattr(symbol_info, "trade_tick_size", 0) or 0) if symbol_info else None,
+                "tick_value": float(getattr(symbol_info, "trade_tick_value", 0) or 0) if symbol_info else None,
+                "contract_size": contract_size if contract_size > 0 else None,
+                "estimated_margin_per_lot": estimated_margin_per_lot,
+            }
+        )
+
+        if not payload["terminal_connected"]:
+            payload["reason"] = "terminal_disconnected"
+            return payload
+        if not payload["terminal_trade_allowed"]:
+            payload["reason"] = "terminal_trade_disabled"
+            return payload
+        if not payload["account_trade_allowed"]:
+            payload["reason"] = "account_trade_disabled"
+            return payload
+        if tick is None:
+            payload["reason"] = "no_tick_data"
+            return payload
+
+        payload["can_trade"] = True
+        payload["reason"] = "ready"
+        return payload
+    except Exception as exc:
+        payload["reason"] = f"account_metrics_failed: {exc}"
+        return payload
+    finally:
+        if initialized:
+            mt5.shutdown()
+
+
 def _mt5_account_id(account):
     login = getattr(account, "login", None) if account else None
     return int(login) if login is not None else None

@@ -27,6 +27,7 @@ import {
   TableHead,
   TableRow,
   CircularProgress,
+  Chip,
 } from "@mui/material";
 import { ThemeProvider, createTheme, useTheme } from "@mui/material/styles";
 
@@ -81,6 +82,38 @@ function getSignalColor(signal) {
   return "#424242";
 }
 
+function parseAutoOpenConfidence(reason) {
+  const text = String(reason || "");
+  const match = text.match(/auto_open:([0-9]+(?:\.[0-9]+)?)/i);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function buildTradeStatusChips(trade) {
+  const chips = [];
+  const badges = Array.isArray(trade.strategy_badges) ? trade.strategy_badges : [];
+  badges.forEach((b) => chips.push({ label: b, color: "primary", variant: "outlined" }));
+
+  const conf = parseAutoOpenConfidence(trade.reason);
+  if (conf !== null) {
+    chips.push({
+      label: `Conf ${(conf * 100).toFixed(0)}%`,
+      color: conf >= 0.65 ? "success" : conf >= 0.55 ? "warning" : "default",
+      variant: "filled",
+    });
+  }
+
+  const exec = String(trade.execution_mode || "").toLowerCase();
+  if (exec === "mouse") {
+    chips.push({ label: "Manual/Mouse", color: "warning", variant: "filled" });
+  } else if (exec === "direct") {
+    chips.push({ label: "Direct", color: "success", variant: "outlined" });
+  }
+
+  return chips;
+}
+
 export default function App( { darkMode, setDarkMode }) {
   const [engine, setEngine] = useState("mt5");
   const [tradeMode, setTradeMode] = useState("scalp");
@@ -131,6 +164,7 @@ export default function App( { darkMode, setDarkMode }) {
   const [positionsLoading, setPositionsLoading] = useState(true);
   const [tpSlDrafts, setTpSlDrafts] = useState({});
   const [tradeActionLoading, setTradeActionLoading] = useState({});
+  const [autoTradeHealth, setAutoTradeHealth] = useState(null);
 
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMsg, setSnackbarMsg] = useState("");
@@ -282,11 +316,19 @@ export default function App( { darkMode, setDarkMode }) {
       .finally(() => setPositionsLoading(false));
   };
 
+  const refreshAutoTradeHealth = () => {
+    fetch(`${getBackendUrl("mt5", "http")}/account/auto_trade_health`)
+      .then((res) => res.json())
+      .then((data) => setAutoTradeHealth(data))
+      .catch(() => setAutoTradeHealth(null));
+  };
+
   useEffect(() => {
     let inFlight = false;
     refreshAccountState();
     refreshOpenCount();
     refreshOpenPositions();
+    refreshAutoTradeHealth();
     refreshBrokers();
     const timer = setInterval(() => {
       if (inFlight) return;
@@ -294,6 +336,7 @@ export default function App( { darkMode, setDarkMode }) {
       refreshAccountState();
       refreshOpenCount();
       refreshOpenPositions();
+      refreshAutoTradeHealth();
       inFlight = false;
     }, 5000);
     return () => {
@@ -756,6 +799,39 @@ export default function App( { darkMode, setDarkMode }) {
                 </span>
               </Typography>
 
+              <Box sx={{ mt: 1 }}>
+                <Typography variant="caption" sx={{ fontWeight: 700, mr: 1 }}>
+                  Auto-Trade Health:
+                </Typography>
+                {autoTradeHealth?.active ? (
+                  <Chip size="small" color="success" label="ACTIVE" />
+                ) : (
+                  <Chip size="small" color="error" label="BLOCKED" />
+                )}
+                <Button
+                  size="small"
+                  variant="text"
+                  sx={{ ml: 1 }}
+                  onClick={refreshAutoTradeHealth}
+                >
+                  refresh health
+                </Button>
+
+                {Array.isArray(autoTradeHealth?.blockers) && autoTradeHealth.blockers.length > 0 ? (
+                  <Box sx={{ mt: 0.5 }}>
+                    {autoTradeHealth.blockers.slice(0, 3).map((msg, idx) => (
+                      <Typography key={`${msg}-${idx}`} variant="caption" color="error.main" sx={{ display: "block" }}>
+                        - {msg}
+                      </Typography>
+                    ))}
+                  </Box>
+                ) : (
+                  <Typography variant="caption" color="success.main" sx={{ display: "block", mt: 0.5 }}>
+                    Semua gate utama lolos. Auto-trader siap eksekusi.
+                  </Typography>
+                )}
+              </Box>
+
               <Box sx={{ display: "flex", alignItems: "center", mt: 1, gap: 2, flexWrap: "wrap" }}>
                 <FormControlLabel
                   control={<Switch checked={autoTradeEnabled} onChange={(e) => setAutoTradeEnabled(e.target.checked)} />}
@@ -904,6 +980,8 @@ export default function App( { darkMode, setDarkMode }) {
                     <TableCell>Broker</TableCell>
                     <TableCell>Account</TableCell>
                     <TableCell>Exec</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell>Reason</TableCell>
                     <TableCell align="right">Action</TableCell>
                   </TableRow>
                 </TableHead>
@@ -944,6 +1022,24 @@ export default function App( { darkMode, setDarkMode }) {
                         <TableCell>{trade.broker_name || "-"}</TableCell>
                         <TableCell>{trade.account_id || "-"}</TableCell>
                         <TableCell>{trade.execution_mode || "-"}</TableCell>
+                        <TableCell sx={{ minWidth: 200 }}>
+                          <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
+                            {buildTradeStatusChips(trade).map((chip, chipIdx) => (
+                              <Chip
+                                key={`${id}-chip-${chip.label}-${chipIdx}`}
+                                size="small"
+                                label={chip.label}
+                                color={chip.color}
+                                variant={chip.variant}
+                              />
+                            ))}
+                          </Box>
+                        </TableCell>
+                        <TableCell sx={{ maxWidth: 220 }}>
+                          <Typography variant="caption" color="text.secondary">
+                            {trade.reason || "-"}
+                          </Typography>
+                        </TableCell>
                         <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
                           <Button size="small" variant="outlined" sx={{ mr: 1 }} disabled={rowLoading} onClick={() => handleSaveTradeTPSL(id)}>
                             Save TP/SL

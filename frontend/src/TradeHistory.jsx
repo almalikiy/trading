@@ -21,9 +21,34 @@ import {
   TextField,
   MenuItem,
   Grid,
+  Chip,
 } from "@mui/material";
 
 const API_BASE = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+
+function parseHistoryStatusChips(reason, executionMode) {
+  const text = String(reason || "");
+  const chips = [];
+
+  const confMatch = text.match(/auto_open:([0-9]+(?:\.[0-9]+)?)/i);
+  if (confMatch) {
+    const conf = Number(confMatch[1]);
+    if (Number.isFinite(conf)) {
+      chips.push({ label: `Conf ${(conf * 100).toFixed(0)}%`, color: conf >= 0.65 ? "success" : "warning" });
+    }
+  }
+
+  if (text.includes("partial_take_profit_stage1")) chips.push({ label: "PTP S1", color: "primary" });
+  if (text.includes("partial_take_profit_stage2")) chips.push({ label: "PTP S2", color: "primary" });
+  if (text.includes("break_even_lock")) chips.push({ label: "BE Lock", color: "info" });
+  if (text.includes("trail_update")) chips.push({ label: "Trailing", color: "secondary" });
+
+  const exec = String(executionMode || "").toLowerCase();
+  if (exec === "mouse") chips.push({ label: "Mouse", color: "warning" });
+  if (exec === "direct") chips.push({ label: "Direct", color: "success" });
+
+  return chips;
+}
 
 export default function TradeHistory() {
   const [history, setHistory] = useState([]);
@@ -346,27 +371,38 @@ export default function TradeHistory() {
                 <TableCell>Entry Time</TableCell>
                 <TableCell>Exit Time</TableCell>
                 <TableCell>Reason</TableCell>
+                <TableCell>Status</TableCell>
                 <TableCell>Broker</TableCell>
                 <TableCell>Account</TableCell>
                 <TableCell>Exec</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {filteredTradeHistory.map((row, idx) => (
-                <TableRow key={idx}>
-                  <TableCell>{idx + 1}</TableCell>
-                  <TableCell>{row.type}</TableCell>
-                  <TableCell>{row.entry}</TableCell>
-                  <TableCell>{row.exit}</TableCell>
-                  <TableCell style={{color: row.profit < 0 ? 'red' : 'green'}}>{row.profit?.toFixed(2)}</TableCell>
-                  <TableCell>{row.entryTime ? new Date(row.entryTime * 1000).toLocaleString() : '-'}</TableCell>
-                  <TableCell>{row.exitTime ? new Date(row.exitTime * 1000).toLocaleString() : '-'}</TableCell>
-                  <TableCell>{row.reason || '-'}</TableCell>
-                  <TableCell>{row.broker_name || '-'}</TableCell>
-                  <TableCell>{row.account_id || '-'}</TableCell>
-                  <TableCell>{row.execution_mode || '-'}</TableCell>
-                </TableRow>
-              ))}
+              {filteredTradeHistory.map((row, idx) => {
+                const statusChips = parseHistoryStatusChips(row.reason, row.execution_mode);
+                return (
+                  <TableRow key={idx}>
+                    <TableCell>{idx + 1}</TableCell>
+                    <TableCell>{row.type}</TableCell>
+                    <TableCell>{row.entry}</TableCell>
+                    <TableCell>{row.exit}</TableCell>
+                    <TableCell style={{color: row.profit < 0 ? 'red' : 'green'}}>{row.profit?.toFixed(2)}</TableCell>
+                    <TableCell>{row.entryTime ? new Date(row.entryTime * 1000).toLocaleString() : '-'}</TableCell>
+                    <TableCell>{row.exitTime ? new Date(row.exitTime * 1000).toLocaleString() : '-'}</TableCell>
+                    <TableCell>{row.reason || '-'}</TableCell>
+                    <TableCell>
+                      <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap", minWidth: 140 }}>
+                        {statusChips.map((chip, chipIdx) => (
+                          <Chip key={`${idx}-${chip.label}-${chipIdx}`} size="small" label={chip.label} color={chip.color} variant="outlined" />
+                        ))}
+                      </Box>
+                    </TableCell>
+                    <TableCell>{row.broker_name || '-'}</TableCell>
+                    <TableCell>{row.account_id || '-'}</TableCell>
+                    <TableCell>{row.execution_mode || '-'}</TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </TableContainer>

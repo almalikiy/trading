@@ -2,12 +2,15 @@ from fastapi import APIRouter, Request, Query, Body
 from .db import get_account_state, save_account_state, insert_trade, get_trade_history, get_broker, get_default_broker, get_open_trades_count, list_open_trades, close_trade_record, resolve_feed_broker, update_open_trade_tpsl
 router = APIRouter()
 from .logic import log_mt5_error
+from datetime import datetime
 import subprocess
 import os
 from pydantic import BaseModel
 from .broker_routes import TradeOpenRequest, open_trade_v2
 from .terminal_adapters import (
     get_broker_adapter,
+    get_broker_account_metrics,
+    probe_broker_order_status,
     get_broker_symbol_constraints,
     normalize_lot_with_constraints,
     sync_all_terminal_trade_state,
@@ -52,6 +55,41 @@ class AutoTradeConfigRequest(BaseModel):
     sl_value: float | None = None
     lot: float | None = None
     max_open_trades: int | None = None
+    risk_mode: str | None = None
+    risk_percent: float | None = None
+    use_account_balance: bool | None = None
+    use_available_margin: bool | None = None
+    min_free_margin_pct: float | None = None
+    max_margin_usage_pct: float | None = None
+    max_spread_points: int | None = None
+    min_signal_score: float | None = None
+    allow_sell: bool | None = None
+    cooldown_sec: int | None = None
+    session_start_hour: int | None = None
+    session_end_hour: int | None = None
+    use_atr_tpsl: bool | None = None
+    atr_period: int | None = None
+    atr_sl_mult: float | None = None
+    atr_tp_mult: float | None = None
+    trailing_enabled: bool | None = None
+    trailing_activation_rr: float | None = None
+    trailing_atr_mult: float | None = None
+    confidence_model: str | None = None
+    confidence_threshold: float | None = None
+    tf_weight_m1: float | None = None
+    tf_weight_m5: float | None = None
+    tf_weight_m15: float | None = None
+    tf_weight_m30: float | None = None
+    partial_tp_enabled: bool | None = None
+    partial_tp_rr1: float | None = None
+    partial_tp_close_pct1: float | None = None
+    partial_tp_rr2: float | None = None
+    partial_tp_close_pct2: float | None = None
+    break_even_enabled: bool | None = None
+    break_even_rr: float | None = None
+    break_even_offset_atr_mult: float | None = None
+    trailing_mode: str | None = None
+    stateful_trail_buffer_atr_mult: float | None = None
 
 @router.post("/account/set_analytic_tpsl")
 def set_analytic_tpsl(request: AnalyticTPSLRequest):
@@ -145,6 +183,7 @@ def mt5_error_log():
 
 
 from .logic import analyze_symbol, get_signal_snapshot, get_ohlcv_snapshot
+from .auto_trader import is_auto_trader_thread_started
 
 def save_trade_history(trade):
     insert_trade(trade)
@@ -172,6 +211,143 @@ def _sync_terminal_trade_views():
     state = get_account_state()
     history_days = None if state.get("trade_history_sync_all") else int(state.get("trade_history_sync_days") or 90)
     sync_all_terminal_trade_state(history_days=history_days)
+
+
+def _decorate_open_positions_with_strategy_state(open_rows, history_rows, account_state):
+    history_rows = history_rows or []
+    trailing_enabled = bool(account_state.get("auto_trade_trailing_enabled", True))
+    trailing_mode = str(account_state.get("auto_trade_trailing_mode") or "stateful_hl")
+
+    decorated = []
+    for trade in open_rows:
+        trade_id = str(trade.get("trade_id") or "")
+        partial_stage1_done = False
+        partial_stage2_done = False
+        for row in history_rows:
+            reason = str(row.get("reason") or "")
+            history_trade_id = str(row.get("trade_id") or "")
+            if not history_trade_id.startswith(f"{trade_id}:partial:"):
+                continue
+            if "partial_take_profit_stage1" in reason:
+                partial_stage1_done = True
+            if "partial_take_profit_stage2" in reason:
+                partial_stage2_done = True
+
+        break_even_locked = False
+        try:
+            sl_val = trade.get("slValue")
+            entry_val = trade.get("entry")
+            side = str(trade.get("type") or "").upper()
+            if sl_val is not None and entry_val is not None:
+                sl_num = float(sl_val)
+                entry_num = float(entry_val)
+                if side == "BUY":
+                    break_even_locked = sl_num >= entry_num
+                elif side == "SELL":
+                    break_even_locked = sl_num <= entry_num
+        except Exception:
+            break_even_locked = False
+
+        badges = []
+        if partial_stage1_done:
+            badges.append("PTP S1")
+        if partial_stage2_done:
+            badges.append("PTP S2")
+        if break_even_locked:
+            badges.append("BE Lock")
+        if trailing_enabled:
+            badges.append("Trail HL" if trailing_mode == "stateful_hl" else "Trail ATR")
+
+        row = dict(trade)
+        row["strategy_state"] = {
+            "partial_stage1_done": partial_stage1_done,
+            "partial_stage2_done": partial_stage2_done,
+            "break_even_locked": break_even_locked,
+            "trailing_enabled": trailing_enabled,
+            "trailing_mode": trailing_mode,
+        }
+        row["strategy_badges"] = badges
+        decorated.append(row)
+    return decorated
+
+
+@router.get("/account/auto_trade_health")
+def get_auto_trade_health():
+    state = get_account_state()
+    checks = []
+    blockers = []
+
+    thread_started = bool(is_auto_trader_thread_started())
+    checks.append({"key": "auto_trader_thread", "ok": thread_started, "value": thread_started, "message": "Auto-trader worker thread"})
+    if not thread_started:
+        blockers.append("Worker thread auto-trader belum aktif.")
+
+    auto_trade_enabled = bool(state.get("auto_trade_enabled", False))
+    checks.append({"key": "auto_trade_enabled", "ok": auto_trade_enabled, "value": auto_trade_enabled, "message": "Auto trade backend enabled"})
+    if not auto_trade_enabled:
+        blockers.append("Toggle Auto Trade Backend masih OFF.")
+
+    real_trade_enabled = bool(state.get("enable_real_trade", False))
+    checks.append({"key": "enable_real_trade", "ok": real_trade_enabled, "value": real_trade_enabled, "message": "Real trade MT5 enabled"})
+    if not real_trade_enabled:
+        blockers.append("Enable Trading on MT5 masih OFF.")
+
+    feed_broker = resolve_feed_broker(state=state, require_terminal_path=False) or get_default_broker()
+    has_broker = feed_broker is not None
+    checks.append({"key": "feed_broker", "ok": has_broker, "value": (feed_broker or {}).get("name"), "message": "Data feed broker tersedia"})
+    if not has_broker:
+        blockers.append("Tidak ada broker aktif/default untuk feed dan eksekusi.")
+
+    symbol = str((feed_broker or {}).get("default_symbol") or state.get("auto_trade_symbol") or "XAUUSD").strip().upper() or "XAUUSD"
+    checks.append({"key": "auto_trade_symbol", "ok": True, "value": symbol, "message": "Symbol auto trade"})
+
+    if has_broker:
+        broker_status = probe_broker_order_status(feed_broker, symbol=symbol, auto_start=False)
+        broker_ready = bool(broker_status.get("can_open_order"))
+        checks.append({"key": "broker_ready", "ok": broker_ready, "value": broker_status.get("reason"), "message": "Kesiapan broker open order"})
+        if not broker_ready:
+            blockers.append(f"Broker belum ready untuk open order: {broker_status.get('reason')}")
+
+        metrics = get_broker_account_metrics(feed_broker, symbol=symbol, auto_start=False)
+        checks.append({"key": "account_metrics_ready", "ok": bool(metrics.get("can_trade")), "value": metrics.get("reason"), "message": "Metrik akun/leverage/margin"})
+        if not metrics.get("can_trade"):
+            blockers.append(f"Metrik akun belum siap: {metrics.get('reason')}")
+
+    start_hour = int(state.get("auto_trade_session_start_hour", 0) or 0)
+    end_hour = int(state.get("auto_trade_session_end_hour", 24) or 24)
+    hour_now = datetime.now().hour
+    if start_hour == end_hour:
+        in_session = True
+    elif start_hour < end_hour:
+        in_session = start_hour <= hour_now < end_hour
+    else:
+        in_session = hour_now >= start_hour or hour_now < end_hour
+    checks.append({"key": "session_window", "ok": in_session, "value": f"{start_hour}-{end_hour}", "message": "Session trading saat ini"})
+    if not in_session:
+        blockers.append("Di luar jam session trading yang dikonfigurasi.")
+
+    open_rows = list_open_trades()
+    mouse_open_rows = [row for row in open_rows if str(row.get("execution_mode") or "").lower() == "mouse"]
+    checks.append({"key": "open_positions_mouse_mode", "ok": len(mouse_open_rows) == 0, "value": len(mouse_open_rows), "message": "Open trade mode mouse"})
+    if mouse_open_rows:
+        blockers.append("Ada open trade dengan execution mode mouse; auto close/partial/trailing backend tidak bisa mengeksekusi posisi ini.")
+
+    atr_period = int(state.get("auto_trade_atr_period", 14) or 14)
+    terminal_path = (feed_broker or {}).get("terminal_path") if feed_broker else None
+    signal_payload = analyze_symbol(symbol, mode="real", terminal_path=terminal_path, atr_period=atr_period)
+    signal_ok = "error" not in signal_payload
+    checks.append({"key": "signal_pipeline", "ok": signal_ok, "value": signal_payload.get("signal") if signal_ok else signal_payload.get("details"), "message": "Pipeline sinyal real-time"})
+    if not signal_ok:
+        blockers.append("Pipeline sinyal gagal mengambil data timeframe dari terminal.")
+
+    return {
+        "status": "ok",
+        "active": len(blockers) == 0,
+        "blockers": blockers,
+        "checks": checks,
+        "symbol": symbol,
+        "feed_broker": feed_broker,
+    }
 
 # === Real Trade Execution Endpoints ===
 
@@ -421,6 +597,180 @@ def set_auto_trade_config(payload: AutoTradeConfigRequest):
             return {"status": "error", "message": "Max open trades harus lebih besar dari 0."}
         state["max_open_trades"] = max_open
 
+    if payload.risk_mode is not None:
+        risk_mode = str(payload.risk_mode).strip().lower()
+        if risk_mode not in ("fixed_lot", "risk_percent"):
+            return {"status": "error", "message": "Risk mode harus fixed_lot atau risk_percent."}
+        state["auto_trade_risk_mode"] = risk_mode
+
+    if payload.risk_percent is not None:
+        risk_percent = float(payload.risk_percent)
+        if risk_percent < 0.1 or risk_percent > 10:
+            return {"status": "error", "message": "Risk percent harus antara 0.1 sampai 10."}
+        state["auto_trade_risk_percent"] = risk_percent
+
+    if payload.use_account_balance is not None:
+        state["auto_trade_use_account_balance"] = bool(payload.use_account_balance)
+
+    if payload.use_available_margin is not None:
+        state["auto_trade_use_available_margin"] = bool(payload.use_available_margin)
+
+    if payload.min_free_margin_pct is not None:
+        min_free_margin_pct = float(payload.min_free_margin_pct)
+        if min_free_margin_pct < 0 or min_free_margin_pct > 95:
+            return {"status": "error", "message": "Min free margin % harus antara 0 sampai 95."}
+        state["auto_trade_min_free_margin_pct"] = min_free_margin_pct
+
+    if payload.max_margin_usage_pct is not None:
+        max_margin_usage_pct = float(payload.max_margin_usage_pct)
+        if max_margin_usage_pct <= 0 or max_margin_usage_pct > 100:
+            return {"status": "error", "message": "Max margin usage % harus antara >0 sampai 100."}
+        state["auto_trade_max_margin_usage_pct"] = max_margin_usage_pct
+
+    if payload.max_spread_points is not None:
+        max_spread_points = int(payload.max_spread_points)
+        if max_spread_points < 0:
+            return {"status": "error", "message": "Max spread points tidak boleh negatif."}
+        state["auto_trade_max_spread_points"] = max_spread_points
+
+    if payload.min_signal_score is not None:
+        min_signal_score = float(payload.min_signal_score)
+        if min_signal_score < 0 or min_signal_score > 0.95:
+            return {"status": "error", "message": "Min signal score harus antara 0 sampai 0.95."}
+        state["auto_trade_min_signal_score"] = min_signal_score
+
+    if payload.allow_sell is not None:
+        state["auto_trade_allow_sell"] = bool(payload.allow_sell)
+
+    if payload.cooldown_sec is not None:
+        cooldown_sec = int(payload.cooldown_sec)
+        if cooldown_sec < 0 or cooldown_sec > 3600:
+            return {"status": "error", "message": "Cooldown harus antara 0 sampai 3600 detik."}
+        state["auto_trade_cooldown_sec"] = cooldown_sec
+
+    if payload.session_start_hour is not None:
+        session_start_hour = int(payload.session_start_hour)
+        if session_start_hour < 0 or session_start_hour > 23:
+            return {"status": "error", "message": "Session start hour harus 0 sampai 23."}
+        state["auto_trade_session_start_hour"] = session_start_hour
+
+    if payload.session_end_hour is not None:
+        session_end_hour = int(payload.session_end_hour)
+        if session_end_hour < 0 or session_end_hour > 24:
+            return {"status": "error", "message": "Session end hour harus 0 sampai 24."}
+        state["auto_trade_session_end_hour"] = session_end_hour
+
+    if payload.use_atr_tpsl is not None:
+        state["auto_trade_use_atr_tpsl"] = bool(payload.use_atr_tpsl)
+
+    if payload.atr_period is not None:
+        atr_period = int(payload.atr_period)
+        if atr_period < 5 or atr_period > 100:
+            return {"status": "error", "message": "ATR period harus antara 5 sampai 100."}
+        state["auto_trade_atr_period"] = atr_period
+
+    if payload.atr_sl_mult is not None:
+        atr_sl_mult = float(payload.atr_sl_mult)
+        if atr_sl_mult < 0.2 or atr_sl_mult > 10:
+            return {"status": "error", "message": "ATR SL multiplier harus antara 0.2 sampai 10."}
+        state["auto_trade_atr_sl_mult"] = atr_sl_mult
+
+    if payload.atr_tp_mult is not None:
+        atr_tp_mult = float(payload.atr_tp_mult)
+        if atr_tp_mult < 0.2 or atr_tp_mult > 20:
+            return {"status": "error", "message": "ATR TP multiplier harus antara 0.2 sampai 20."}
+        state["auto_trade_atr_tp_mult"] = atr_tp_mult
+
+    if payload.trailing_enabled is not None:
+        state["auto_trade_trailing_enabled"] = bool(payload.trailing_enabled)
+
+    if payload.trailing_activation_rr is not None:
+        trailing_activation_rr = float(payload.trailing_activation_rr)
+        if trailing_activation_rr < 0.2 or trailing_activation_rr > 5:
+            return {"status": "error", "message": "Trailing activation RR harus antara 0.2 sampai 5."}
+        state["auto_trade_trailing_activation_rr"] = trailing_activation_rr
+
+    if payload.trailing_atr_mult is not None:
+        trailing_atr_mult = float(payload.trailing_atr_mult)
+        if trailing_atr_mult < 0.2 or trailing_atr_mult > 10:
+            return {"status": "error", "message": "Trailing ATR multiplier harus antara 0.2 sampai 10."}
+        state["auto_trade_trailing_atr_mult"] = trailing_atr_mult
+
+    if payload.confidence_model is not None:
+        confidence_model = str(payload.confidence_model).strip().lower()
+        if confidence_model not in ("weighted", "equal"):
+            return {"status": "error", "message": "Confidence model harus weighted atau equal."}
+        state["auto_trade_confidence_model"] = confidence_model
+
+    if payload.confidence_threshold is not None:
+        confidence_threshold = float(payload.confidence_threshold)
+        if confidence_threshold < 0 or confidence_threshold > 0.95:
+            return {"status": "error", "message": "Confidence threshold harus antara 0 sampai 0.95."}
+        state["auto_trade_confidence_threshold"] = confidence_threshold
+
+    if payload.tf_weight_m1 is not None:
+        state["auto_trade_tf_weight_m1"] = max(0.0, float(payload.tf_weight_m1))
+    if payload.tf_weight_m5 is not None:
+        state["auto_trade_tf_weight_m5"] = max(0.0, float(payload.tf_weight_m5))
+    if payload.tf_weight_m15 is not None:
+        state["auto_trade_tf_weight_m15"] = max(0.0, float(payload.tf_weight_m15))
+    if payload.tf_weight_m30 is not None:
+        state["auto_trade_tf_weight_m30"] = max(0.0, float(payload.tf_weight_m30))
+
+    if payload.partial_tp_enabled is not None:
+        state["auto_trade_partial_tp_enabled"] = bool(payload.partial_tp_enabled)
+
+    if payload.partial_tp_rr1 is not None:
+        value = float(payload.partial_tp_rr1)
+        if value < 0.2 or value > 10:
+            return {"status": "error", "message": "Partial TP RR1 harus antara 0.2 sampai 10."}
+        state["auto_trade_partial_tp_rr1"] = value
+
+    if payload.partial_tp_close_pct1 is not None:
+        value = float(payload.partial_tp_close_pct1)
+        if value < 1 or value > 95:
+            return {"status": "error", "message": "Partial TP close %1 harus antara 1 sampai 95."}
+        state["auto_trade_partial_tp_close_pct1"] = value
+
+    if payload.partial_tp_rr2 is not None:
+        value = float(payload.partial_tp_rr2)
+        if value < 0.2 or value > 20:
+            return {"status": "error", "message": "Partial TP RR2 harus antara 0.2 sampai 20."}
+        state["auto_trade_partial_tp_rr2"] = value
+
+    if payload.partial_tp_close_pct2 is not None:
+        value = float(payload.partial_tp_close_pct2)
+        if value < 1 or value > 95:
+            return {"status": "error", "message": "Partial TP close %2 harus antara 1 sampai 95."}
+        state["auto_trade_partial_tp_close_pct2"] = value
+
+    if payload.break_even_enabled is not None:
+        state["auto_trade_break_even_enabled"] = bool(payload.break_even_enabled)
+
+    if payload.break_even_rr is not None:
+        value = float(payload.break_even_rr)
+        if value < 0.2 or value > 10:
+            return {"status": "error", "message": "Break-even RR harus antara 0.2 sampai 10."}
+        state["auto_trade_break_even_rr"] = value
+
+    if payload.break_even_offset_atr_mult is not None:
+        value = float(payload.break_even_offset_atr_mult)
+        if value < 0 or value > 2:
+            return {"status": "error", "message": "Break-even offset ATR mult harus antara 0 sampai 2."}
+        state["auto_trade_break_even_offset_atr_mult"] = value
+
+    if payload.trailing_mode is not None:
+        value = str(payload.trailing_mode).strip().lower()
+        if value not in ("atr", "stateful_hl"):
+            return {"status": "error", "message": "Trailing mode harus atr atau stateful_hl."}
+        state["auto_trade_trailing_mode"] = value
+
+    if payload.stateful_trail_buffer_atr_mult is not None:
+        value = float(payload.stateful_trail_buffer_atr_mult)
+        if value < 0 or value > 5:
+            return {"status": "error", "message": "Stateful trail buffer ATR mult harus antara 0 sampai 5."}
+        state["auto_trade_stateful_trail_buffer_atr_mult"] = value
+
     state["auto_trade_symbol"] = _resolve_auto_trade_symbol_for_state(state)
 
     save_account_state(state)
@@ -428,6 +778,7 @@ def set_auto_trade_config(payload: AutoTradeConfigRequest):
     broker_for_response = _resolve_auto_trade_broker_for_state(state)
     symbol_for_response = _resolve_auto_trade_symbol_for_state(state)
     constraints = get_broker_symbol_constraints(broker_for_response, symbol=symbol_for_response, auto_start=False)
+    account_metrics = get_broker_account_metrics(broker_for_response, symbol=symbol_for_response, auto_start=False)
     return {
         "status": "ok",
         "auto_trade_symbol": state.get("auto_trade_symbol"),
@@ -438,7 +789,43 @@ def set_auto_trade_config(payload: AutoTradeConfigRequest):
         "sl_value": state.get("sl_value"),
         "lot": state.get("lot"),
         "max_open_trades": state.get("max_open_trades"),
+        "risk_mode": state.get("auto_trade_risk_mode", "fixed_lot"),
+        "risk_percent": state.get("auto_trade_risk_percent", 1.0),
+        "use_account_balance": bool(state.get("auto_trade_use_account_balance", True)),
+        "use_available_margin": bool(state.get("auto_trade_use_available_margin", True)),
+        "min_free_margin_pct": state.get("auto_trade_min_free_margin_pct", 30.0),
+        "max_margin_usage_pct": state.get("auto_trade_max_margin_usage_pct", 70.0),
+        "max_spread_points": state.get("auto_trade_max_spread_points", 120),
+        "min_signal_score": state.get("auto_trade_min_signal_score", 0.55),
+        "allow_sell": bool(state.get("auto_trade_allow_sell", True)),
+        "cooldown_sec": state.get("auto_trade_cooldown_sec", 30),
+        "session_start_hour": state.get("auto_trade_session_start_hour", 0),
+        "session_end_hour": state.get("auto_trade_session_end_hour", 24),
+        "use_atr_tpsl": bool(state.get("auto_trade_use_atr_tpsl", True)),
+        "atr_period": state.get("auto_trade_atr_period", 14),
+        "atr_sl_mult": state.get("auto_trade_atr_sl_mult", 1.5),
+        "atr_tp_mult": state.get("auto_trade_atr_tp_mult", 2.5),
+        "trailing_enabled": bool(state.get("auto_trade_trailing_enabled", True)),
+        "trailing_activation_rr": state.get("auto_trade_trailing_activation_rr", 1.0),
+        "trailing_atr_mult": state.get("auto_trade_trailing_atr_mult", 1.0),
+        "confidence_model": state.get("auto_trade_confidence_model", "weighted"),
+        "confidence_threshold": state.get("auto_trade_confidence_threshold", 0.6),
+        "tf_weight_m1": state.get("auto_trade_tf_weight_m1", 0.35),
+        "tf_weight_m5": state.get("auto_trade_tf_weight_m5", 0.30),
+        "tf_weight_m15": state.get("auto_trade_tf_weight_m15", 0.20),
+        "tf_weight_m30": state.get("auto_trade_tf_weight_m30", 0.15),
+        "partial_tp_enabled": bool(state.get("auto_trade_partial_tp_enabled", True)),
+        "partial_tp_rr1": state.get("auto_trade_partial_tp_rr1", 1.0),
+        "partial_tp_close_pct1": state.get("auto_trade_partial_tp_close_pct1", 40.0),
+        "partial_tp_rr2": state.get("auto_trade_partial_tp_rr2", 2.0),
+        "partial_tp_close_pct2": state.get("auto_trade_partial_tp_close_pct2", 35.0),
+        "break_even_enabled": bool(state.get("auto_trade_break_even_enabled", True)),
+        "break_even_rr": state.get("auto_trade_break_even_rr", 1.0),
+        "break_even_offset_atr_mult": state.get("auto_trade_break_even_offset_atr_mult", 0.1),
+        "trailing_mode": state.get("auto_trade_trailing_mode", "stateful_hl"),
+        "stateful_trail_buffer_atr_mult": state.get("auto_trade_stateful_trail_buffer_atr_mult", 0.5),
         "constraints": constraints,
+        "account_metrics": account_metrics,
     }
 
 
@@ -448,6 +835,7 @@ def get_auto_trade_constraints():
     broker = _resolve_auto_trade_broker_for_state(state)
     symbol = _resolve_auto_trade_symbol_for_state(state)
     constraints = get_broker_symbol_constraints(broker, symbol=symbol, auto_start=False)
+    account_metrics = get_broker_account_metrics(broker, symbol=symbol, auto_start=False)
 
     normalized_lot = float(state.get("lot", 0.01) or 0.01)
     if constraints.get("can_open_order") and constraints.get("volume_step"):
@@ -465,10 +853,46 @@ def get_auto_trade_constraints():
             "tp_value": state.get("tp_value"),
             "sl_value": state.get("sl_value"),
             "auto_analytic_tpsl": state.get("auto_analytic_tpsl"),
+            "risk_mode": state.get("auto_trade_risk_mode", "fixed_lot"),
+            "risk_percent": state.get("auto_trade_risk_percent", 1.0),
+            "use_account_balance": bool(state.get("auto_trade_use_account_balance", True)),
+            "use_available_margin": bool(state.get("auto_trade_use_available_margin", True)),
+            "min_free_margin_pct": state.get("auto_trade_min_free_margin_pct", 30.0),
+            "max_margin_usage_pct": state.get("auto_trade_max_margin_usage_pct", 70.0),
+            "max_spread_points": state.get("auto_trade_max_spread_points", 120),
+            "min_signal_score": state.get("auto_trade_min_signal_score", 0.55),
+            "allow_sell": bool(state.get("auto_trade_allow_sell", True)),
+            "cooldown_sec": state.get("auto_trade_cooldown_sec", 30),
+            "session_start_hour": state.get("auto_trade_session_start_hour", 0),
+            "session_end_hour": state.get("auto_trade_session_end_hour", 24),
+            "use_atr_tpsl": bool(state.get("auto_trade_use_atr_tpsl", True)),
+            "atr_period": state.get("auto_trade_atr_period", 14),
+            "atr_sl_mult": state.get("auto_trade_atr_sl_mult", 1.5),
+            "atr_tp_mult": state.get("auto_trade_atr_tp_mult", 2.5),
+            "trailing_enabled": bool(state.get("auto_trade_trailing_enabled", True)),
+            "trailing_activation_rr": state.get("auto_trade_trailing_activation_rr", 1.0),
+            "trailing_atr_mult": state.get("auto_trade_trailing_atr_mult", 1.0),
+            "confidence_model": state.get("auto_trade_confidence_model", "weighted"),
+            "confidence_threshold": state.get("auto_trade_confidence_threshold", 0.6),
+            "tf_weight_m1": state.get("auto_trade_tf_weight_m1", 0.35),
+            "tf_weight_m5": state.get("auto_trade_tf_weight_m5", 0.30),
+            "tf_weight_m15": state.get("auto_trade_tf_weight_m15", 0.20),
+            "tf_weight_m30": state.get("auto_trade_tf_weight_m30", 0.15),
+            "partial_tp_enabled": bool(state.get("auto_trade_partial_tp_enabled", True)),
+            "partial_tp_rr1": state.get("auto_trade_partial_tp_rr1", 1.0),
+            "partial_tp_close_pct1": state.get("auto_trade_partial_tp_close_pct1", 40.0),
+            "partial_tp_rr2": state.get("auto_trade_partial_tp_rr2", 2.0),
+            "partial_tp_close_pct2": state.get("auto_trade_partial_tp_close_pct2", 35.0),
+            "break_even_enabled": bool(state.get("auto_trade_break_even_enabled", True)),
+            "break_even_rr": state.get("auto_trade_break_even_rr", 1.0),
+            "break_even_offset_atr_mult": state.get("auto_trade_break_even_offset_atr_mult", 0.1),
+            "trailing_mode": state.get("auto_trade_trailing_mode", "stateful_hl"),
+            "stateful_trail_buffer_atr_mult": state.get("auto_trade_stateful_trail_buffer_atr_mult", 0.5),
         },
         "normalized": {
             "lot": normalized_lot,
         },
+        "account_metrics": account_metrics,
     }
 
 
@@ -621,7 +1045,10 @@ def get_trade_open_count():
 @router.get("/trade/open_positions")
 def get_trade_open_positions():
     _sync_terminal_trade_views()
-    return list_open_trades()
+    rows = list_open_trades()
+    history = get_trade_history()
+    state = get_account_state()
+    return _decorate_open_positions_with_strategy_state(rows, history, state)
 
 
 @router.post("/trade/update_tpsl")

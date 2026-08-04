@@ -61,6 +61,41 @@ export default function AccountMonitor() {
   const [autoAnalyticTpSl, setAutoAnalyticTpSl] = useState(false);
   const [autoTradeTpValue, setAutoTradeTpValue] = useState(0.5);
   const [autoTradeSlValue, setAutoTradeSlValue] = useState(0.5);
+  const [autoTradeRiskMode, setAutoTradeRiskMode] = useState("fixed_lot");
+  const [autoTradeRiskPercent, setAutoTradeRiskPercent] = useState(1);
+  const [autoTradeUseAccountBalance, setAutoTradeUseAccountBalance] = useState(true);
+  const [autoTradeUseAvailableMargin, setAutoTradeUseAvailableMargin] = useState(true);
+  const [autoTradeMinFreeMarginPct, setAutoTradeMinFreeMarginPct] = useState(30);
+  const [autoTradeMaxMarginUsagePct, setAutoTradeMaxMarginUsagePct] = useState(70);
+  const [autoTradeMaxSpreadPoints, setAutoTradeMaxSpreadPoints] = useState(120);
+  const [autoTradeMinSignalScore, setAutoTradeMinSignalScore] = useState(0.55);
+  const [autoTradeAllowSell, setAutoTradeAllowSell] = useState(true);
+  const [autoTradeCooldownSec, setAutoTradeCooldownSec] = useState(30);
+  const [autoTradeSessionStartHour, setAutoTradeSessionStartHour] = useState(0);
+  const [autoTradeSessionEndHour, setAutoTradeSessionEndHour] = useState(24);
+  const [autoTradeUseAtrTpSl, setAutoTradeUseAtrTpSl] = useState(true);
+  const [autoTradeAtrPeriod, setAutoTradeAtrPeriod] = useState(14);
+  const [autoTradeAtrSlMult, setAutoTradeAtrSlMult] = useState(1.5);
+  const [autoTradeAtrTpMult, setAutoTradeAtrTpMult] = useState(2.5);
+  const [autoTradeTrailingEnabled, setAutoTradeTrailingEnabled] = useState(true);
+  const [autoTradeTrailingActivationRr, setAutoTradeTrailingActivationRr] = useState(1.0);
+  const [autoTradeTrailingAtrMult, setAutoTradeTrailingAtrMult] = useState(1.0);
+  const [autoTradeConfidenceModel, setAutoTradeConfidenceModel] = useState("weighted");
+  const [autoTradeConfidenceThreshold, setAutoTradeConfidenceThreshold] = useState(0.6);
+  const [autoTradeTfWeightM1, setAutoTradeTfWeightM1] = useState(0.35);
+  const [autoTradeTfWeightM5, setAutoTradeTfWeightM5] = useState(0.30);
+  const [autoTradeTfWeightM15, setAutoTradeTfWeightM15] = useState(0.20);
+  const [autoTradeTfWeightM30, setAutoTradeTfWeightM30] = useState(0.15);
+  const [autoTradePartialTpEnabled, setAutoTradePartialTpEnabled] = useState(true);
+  const [autoTradePartialTpRr1, setAutoTradePartialTpRr1] = useState(1.0);
+  const [autoTradePartialTpClosePct1, setAutoTradePartialTpClosePct1] = useState(40);
+  const [autoTradePartialTpRr2, setAutoTradePartialTpRr2] = useState(2.0);
+  const [autoTradePartialTpClosePct2, setAutoTradePartialTpClosePct2] = useState(35);
+  const [autoTradeBreakEvenEnabled, setAutoTradeBreakEvenEnabled] = useState(true);
+  const [autoTradeBreakEvenRr, setAutoTradeBreakEvenRr] = useState(1.0);
+  const [autoTradeBreakEvenOffsetAtrMult, setAutoTradeBreakEvenOffsetAtrMult] = useState(0.1);
+  const [autoTradeTrailingMode, setAutoTradeTrailingMode] = useState("stateful_hl");
+  const [autoTradeStatefulTrailBufferAtrMult, setAutoTradeStatefulTrailBufferAtrMult] = useState(0.5);
   const [autoTradeConfigSaving, setAutoTradeConfigSaving] = useState(false);
   const [autoTradeConstraints, setAutoTradeConstraints] = useState(null);
   const [autoTradeConstraintsLoading, setAutoTradeConstraintsLoading] = useState(false);
@@ -96,6 +131,41 @@ export default function AccountMonitor() {
         setAutoAnalyticTpSl(!!data.auto_analytic_tpsl);
         setAutoTradeTpValue(Number(data.tp_value ?? 0.5));
         setAutoTradeSlValue(Number(data.sl_value ?? 0.5));
+        setAutoTradeRiskMode(String(data.auto_trade_risk_mode || "fixed_lot"));
+        setAutoTradeRiskPercent(Number(data.auto_trade_risk_percent ?? 1));
+        setAutoTradeUseAccountBalance(data.auto_trade_use_account_balance !== false);
+        setAutoTradeUseAvailableMargin(data.auto_trade_use_available_margin !== false);
+        setAutoTradeMinFreeMarginPct(Number(data.auto_trade_min_free_margin_pct ?? 30));
+        setAutoTradeMaxMarginUsagePct(Number(data.auto_trade_max_margin_usage_pct ?? 70));
+        setAutoTradeMaxSpreadPoints(Number(data.auto_trade_max_spread_points ?? 120));
+        setAutoTradeMinSignalScore(Number(data.auto_trade_min_signal_score ?? 0.55));
+        setAutoTradeAllowSell(data.auto_trade_allow_sell !== false);
+        setAutoTradeCooldownSec(Number(data.auto_trade_cooldown_sec ?? 30));
+        setAutoTradeSessionStartHour(Number(data.auto_trade_session_start_hour ?? 0));
+        setAutoTradeSessionEndHour(Number(data.auto_trade_session_end_hour ?? 24));
+        setAutoTradeUseAtrTpSl(data.auto_trade_use_atr_tpsl !== false);
+        setAutoTradeAtrPeriod(Number(data.auto_trade_atr_period ?? 14));
+        setAutoTradeAtrSlMult(Number(data.auto_trade_atr_sl_mult ?? 1.5));
+        setAutoTradeAtrTpMult(Number(data.auto_trade_atr_tp_mult ?? 2.5));
+        setAutoTradeTrailingEnabled(data.auto_trade_trailing_enabled !== false);
+        setAutoTradeTrailingActivationRr(Number(data.auto_trade_trailing_activation_rr ?? 1.0));
+        setAutoTradeTrailingAtrMult(Number(data.auto_trade_trailing_atr_mult ?? 1.0));
+        setAutoTradeConfidenceModel(String(data.auto_trade_confidence_model || "weighted"));
+        setAutoTradeConfidenceThreshold(Number(data.auto_trade_confidence_threshold ?? 0.6));
+        setAutoTradeTfWeightM1(Number(data.auto_trade_tf_weight_m1 ?? 0.35));
+        setAutoTradeTfWeightM5(Number(data.auto_trade_tf_weight_m5 ?? 0.30));
+        setAutoTradeTfWeightM15(Number(data.auto_trade_tf_weight_m15 ?? 0.20));
+        setAutoTradeTfWeightM30(Number(data.auto_trade_tf_weight_m30 ?? 0.15));
+        setAutoTradePartialTpEnabled(data.auto_trade_partial_tp_enabled !== false);
+        setAutoTradePartialTpRr1(Number(data.auto_trade_partial_tp_rr1 ?? 1.0));
+        setAutoTradePartialTpClosePct1(Number(data.auto_trade_partial_tp_close_pct1 ?? 40));
+        setAutoTradePartialTpRr2(Number(data.auto_trade_partial_tp_rr2 ?? 2.0));
+        setAutoTradePartialTpClosePct2(Number(data.auto_trade_partial_tp_close_pct2 ?? 35));
+        setAutoTradeBreakEvenEnabled(data.auto_trade_break_even_enabled !== false);
+        setAutoTradeBreakEvenRr(Number(data.auto_trade_break_even_rr ?? 1.0));
+        setAutoTradeBreakEvenOffsetAtrMult(Number(data.auto_trade_break_even_offset_atr_mult ?? 0.1));
+        setAutoTradeTrailingMode(String(data.auto_trade_trailing_mode || "stateful_hl"));
+        setAutoTradeStatefulTrailBufferAtrMult(Number(data.auto_trade_stateful_trail_buffer_atr_mult ?? 0.5));
         setTradeHistorySyncMode(data.trade_history_sync_all ? "all" : "days");
         setTradeHistorySyncDays(Number(data.trade_history_sync_days || 90));
         setRuntimeLoaded(true);
@@ -253,6 +323,41 @@ export default function AccountMonitor() {
     setAutoAnalyticTpSl(!!data.auto_analytic_tpsl);
     setAutoTradeTpValue(Number(data.tp_value ?? 0.5));
     setAutoTradeSlValue(Number(data.sl_value ?? 0.5));
+    setAutoTradeRiskMode(String(data.auto_trade_risk_mode || "fixed_lot"));
+    setAutoTradeRiskPercent(Number(data.auto_trade_risk_percent ?? 1));
+    setAutoTradeUseAccountBalance(data.auto_trade_use_account_balance !== false);
+    setAutoTradeUseAvailableMargin(data.auto_trade_use_available_margin !== false);
+    setAutoTradeMinFreeMarginPct(Number(data.auto_trade_min_free_margin_pct ?? 30));
+    setAutoTradeMaxMarginUsagePct(Number(data.auto_trade_max_margin_usage_pct ?? 70));
+    setAutoTradeMaxSpreadPoints(Number(data.auto_trade_max_spread_points ?? 120));
+    setAutoTradeMinSignalScore(Number(data.auto_trade_min_signal_score ?? 0.55));
+    setAutoTradeAllowSell(data.auto_trade_allow_sell !== false);
+    setAutoTradeCooldownSec(Number(data.auto_trade_cooldown_sec ?? 30));
+    setAutoTradeSessionStartHour(Number(data.auto_trade_session_start_hour ?? 0));
+    setAutoTradeSessionEndHour(Number(data.auto_trade_session_end_hour ?? 24));
+    setAutoTradeUseAtrTpSl(data.auto_trade_use_atr_tpsl !== false);
+    setAutoTradeAtrPeriod(Number(data.auto_trade_atr_period ?? 14));
+    setAutoTradeAtrSlMult(Number(data.auto_trade_atr_sl_mult ?? 1.5));
+    setAutoTradeAtrTpMult(Number(data.auto_trade_atr_tp_mult ?? 2.5));
+    setAutoTradeTrailingEnabled(data.auto_trade_trailing_enabled !== false);
+    setAutoTradeTrailingActivationRr(Number(data.auto_trade_trailing_activation_rr ?? 1.0));
+    setAutoTradeTrailingAtrMult(Number(data.auto_trade_trailing_atr_mult ?? 1.0));
+    setAutoTradeConfidenceModel(String(data.auto_trade_confidence_model || "weighted"));
+    setAutoTradeConfidenceThreshold(Number(data.auto_trade_confidence_threshold ?? 0.6));
+    setAutoTradeTfWeightM1(Number(data.auto_trade_tf_weight_m1 ?? 0.35));
+    setAutoTradeTfWeightM5(Number(data.auto_trade_tf_weight_m5 ?? 0.30));
+    setAutoTradeTfWeightM15(Number(data.auto_trade_tf_weight_m15 ?? 0.20));
+    setAutoTradeTfWeightM30(Number(data.auto_trade_tf_weight_m30 ?? 0.15));
+    setAutoTradePartialTpEnabled(data.auto_trade_partial_tp_enabled !== false);
+    setAutoTradePartialTpRr1(Number(data.auto_trade_partial_tp_rr1 ?? 1.0));
+    setAutoTradePartialTpClosePct1(Number(data.auto_trade_partial_tp_close_pct1 ?? 40));
+    setAutoTradePartialTpRr2(Number(data.auto_trade_partial_tp_rr2 ?? 2.0));
+    setAutoTradePartialTpClosePct2(Number(data.auto_trade_partial_tp_close_pct2 ?? 35));
+    setAutoTradeBreakEvenEnabled(data.auto_trade_break_even_enabled !== false);
+    setAutoTradeBreakEvenRr(Number(data.auto_trade_break_even_rr ?? 1.0));
+    setAutoTradeBreakEvenOffsetAtrMult(Number(data.auto_trade_break_even_offset_atr_mult ?? 0.1));
+    setAutoTradeTrailingMode(String(data.auto_trade_trailing_mode || "stateful_hl"));
+    setAutoTradeStatefulTrailBufferAtrMult(Number(data.auto_trade_stateful_trail_buffer_atr_mult ?? 0.5));
     setTradeHistorySyncMode(data.trade_history_sync_all ? "all" : "days");
     setTradeHistorySyncDays(Number(data.trade_history_sync_days || 90));
   };
@@ -325,6 +430,41 @@ export default function AccountMonitor() {
           sl_value: Number(autoTradeSlValue || 0),
           lot: safeLot,
           max_open_trades: safeMaxOpen,
+          risk_mode: autoTradeRiskMode,
+          risk_percent: Number(autoTradeRiskPercent || 1),
+          use_account_balance: !!autoTradeUseAccountBalance,
+          use_available_margin: !!autoTradeUseAvailableMargin,
+          min_free_margin_pct: Number(autoTradeMinFreeMarginPct || 0),
+          max_margin_usage_pct: Number(autoTradeMaxMarginUsagePct || 0),
+          max_spread_points: Number(autoTradeMaxSpreadPoints || 0),
+          min_signal_score: Number(autoTradeMinSignalScore || 0),
+          allow_sell: !!autoTradeAllowSell,
+          cooldown_sec: Number(autoTradeCooldownSec || 0),
+          session_start_hour: Number(autoTradeSessionStartHour || 0),
+          session_end_hour: Number(autoTradeSessionEndHour || 24),
+          use_atr_tpsl: !!autoTradeUseAtrTpSl,
+          atr_period: Number(autoTradeAtrPeriod || 14),
+          atr_sl_mult: Number(autoTradeAtrSlMult || 1.5),
+          atr_tp_mult: Number(autoTradeAtrTpMult || 2.5),
+          trailing_enabled: !!autoTradeTrailingEnabled,
+          trailing_activation_rr: Number(autoTradeTrailingActivationRr || 1),
+          trailing_atr_mult: Number(autoTradeTrailingAtrMult || 1),
+          confidence_model: autoTradeConfidenceModel,
+          confidence_threshold: Number(autoTradeConfidenceThreshold || 0.6),
+          tf_weight_m1: Number(autoTradeTfWeightM1 || 0),
+          tf_weight_m5: Number(autoTradeTfWeightM5 || 0),
+          tf_weight_m15: Number(autoTradeTfWeightM15 || 0),
+          tf_weight_m30: Number(autoTradeTfWeightM30 || 0),
+          partial_tp_enabled: !!autoTradePartialTpEnabled,
+          partial_tp_rr1: Number(autoTradePartialTpRr1 || 1),
+          partial_tp_close_pct1: Number(autoTradePartialTpClosePct1 || 0),
+          partial_tp_rr2: Number(autoTradePartialTpRr2 || 2),
+          partial_tp_close_pct2: Number(autoTradePartialTpClosePct2 || 0),
+          break_even_enabled: !!autoTradeBreakEvenEnabled,
+          break_even_rr: Number(autoTradeBreakEvenRr || 1),
+          break_even_offset_atr_mult: Number(autoTradeBreakEvenOffsetAtrMult || 0),
+          trailing_mode: autoTradeTrailingMode,
+          stateful_trail_buffer_atr_mult: Number(autoTradeStatefulTrailBufferAtrMult || 0),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -637,6 +777,369 @@ const setDefaultBroker = async (id) => {
                 label="Auto Analytic TP/SL"
               />
             </Grid>
+            <Grid item xs={12} md={4}>
+              <FormControlLabel
+                control={<Switch checked={autoTradeAllowSell} onChange={(e) => setAutoTradeAllowSell(e.target.checked)} />}
+                label="Allow Sell Signal"
+              />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <TextField
+                fullWidth
+                select
+                size="small"
+                label="Risk Mode"
+                value={autoTradeRiskMode}
+                onChange={(e) => setAutoTradeRiskMode(e.target.value)}
+              >
+                <MenuItem value="fixed_lot">Fixed Lot</MenuItem>
+                <MenuItem value="risk_percent">Risk % per Trade</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Risk %"
+                type="number"
+                value={autoTradeRiskPercent}
+                onChange={(e) => setAutoTradeRiskPercent(Number(e.target.value))}
+                inputProps={{ min: 0.1, max: 10, step: 0.1 }}
+                disabled={autoTradeRiskMode !== "risk_percent"}
+                helperText="0.1 - 10%"
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Min Signal Score"
+                type="number"
+                value={autoTradeMinSignalScore}
+                onChange={(e) => setAutoTradeMinSignalScore(Number(e.target.value))}
+                inputProps={{ min: 0, max: 0.95, step: 0.01 }}
+                helperText="0.00 - 0.95"
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Max Spread (points)"
+                type="number"
+                value={autoTradeMaxSpreadPoints}
+                onChange={(e) => setAutoTradeMaxSpreadPoints(Number(e.target.value))}
+                inputProps={{ min: 0, step: 1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Cooldown (sec)"
+                type="number"
+                value={autoTradeCooldownSec}
+                onChange={(e) => setAutoTradeCooldownSec(Number(e.target.value))}
+                inputProps={{ min: 0, max: 3600, step: 1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Session Start (hour)"
+                type="number"
+                value={autoTradeSessionStartHour}
+                onChange={(e) => setAutoTradeSessionStartHour(Number(e.target.value))}
+                inputProps={{ min: 0, max: 23, step: 1 }}
+                helperText="0 - 23"
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Session End (hour)"
+                type="number"
+                value={autoTradeSessionEndHour}
+                onChange={(e) => setAutoTradeSessionEndHour(Number(e.target.value))}
+                inputProps={{ min: 0, max: 24, step: 1 }}
+                helperText="0 - 24"
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Min Free Margin %"
+                type="number"
+                value={autoTradeMinFreeMarginPct}
+                onChange={(e) => setAutoTradeMinFreeMarginPct(Number(e.target.value))}
+                inputProps={{ min: 0, max: 95, step: 1 }}
+                helperText="Cadangan margin minimum"
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Max Margin Usage %"
+                type="number"
+                value={autoTradeMaxMarginUsagePct}
+                onChange={(e) => setAutoTradeMaxMarginUsagePct(Number(e.target.value))}
+                inputProps={{ min: 1, max: 100, step: 1 }}
+                helperText="Batas margin untuk order baru"
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <FormControlLabel
+                control={<Switch checked={autoTradeUseAvailableMargin} onChange={(e) => setAutoTradeUseAvailableMargin(e.target.checked)} />}
+                label="Risk Base: Available Margin"
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <FormControlLabel
+                control={<Switch checked={autoTradeUseAccountBalance} onChange={(e) => setAutoTradeUseAccountBalance(e.target.checked)} />}
+                label="Risk Base: Account Balance"
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <FormControlLabel
+                control={<Switch checked={autoTradeUseAtrTpSl} onChange={(e) => setAutoTradeUseAtrTpSl(e.target.checked)} />}
+                label="Adaptive ATR TP/SL"
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="ATR Period"
+                type="number"
+                value={autoTradeAtrPeriod}
+                onChange={(e) => setAutoTradeAtrPeriod(Number(e.target.value))}
+                inputProps={{ min: 5, max: 100, step: 1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="ATR SL Mult"
+                type="number"
+                value={autoTradeAtrSlMult}
+                onChange={(e) => setAutoTradeAtrSlMult(Number(e.target.value))}
+                inputProps={{ min: 0.2, max: 10, step: 0.1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="ATR TP Mult"
+                type="number"
+                value={autoTradeAtrTpMult}
+                onChange={(e) => setAutoTradeAtrTpMult(Number(e.target.value))}
+                inputProps={{ min: 0.2, max: 20, step: 0.1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <FormControlLabel
+                control={<Switch checked={autoTradeTrailingEnabled} onChange={(e) => setAutoTradeTrailingEnabled(e.target.checked)} />}
+                label="Trailing Stop Enabled"
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Trailing Activate RR"
+                type="number"
+                value={autoTradeTrailingActivationRr}
+                onChange={(e) => setAutoTradeTrailingActivationRr(Number(e.target.value))}
+                inputProps={{ min: 0.2, max: 5, step: 0.1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Trailing ATR Mult"
+                type="number"
+                value={autoTradeTrailingAtrMult}
+                onChange={(e) => setAutoTradeTrailingAtrMult(Number(e.target.value))}
+                inputProps={{ min: 0.2, max: 10, step: 0.1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                select
+                size="small"
+                label="Confidence Model"
+                value={autoTradeConfidenceModel}
+                onChange={(e) => setAutoTradeConfidenceModel(e.target.value)}
+              >
+                <MenuItem value="weighted">Weighted per TF</MenuItem>
+                <MenuItem value="equal">Equal per TF</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Confidence Threshold"
+                type="number"
+                value={autoTradeConfidenceThreshold}
+                onChange={(e) => setAutoTradeConfidenceThreshold(Number(e.target.value))}
+                inputProps={{ min: 0, max: 0.95, step: 0.01 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Weight M1"
+                type="number"
+                value={autoTradeTfWeightM1}
+                onChange={(e) => setAutoTradeTfWeightM1(Number(e.target.value))}
+                inputProps={{ min: 0, step: 0.01 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Weight M5"
+                type="number"
+                value={autoTradeTfWeightM5}
+                onChange={(e) => setAutoTradeTfWeightM5(Number(e.target.value))}
+                inputProps={{ min: 0, step: 0.01 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Weight M15"
+                type="number"
+                value={autoTradeTfWeightM15}
+                onChange={(e) => setAutoTradeTfWeightM15(Number(e.target.value))}
+                inputProps={{ min: 0, step: 0.01 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Weight M30"
+                type="number"
+                value={autoTradeTfWeightM30}
+                onChange={(e) => setAutoTradeTfWeightM30(Number(e.target.value))}
+                inputProps={{ min: 0, step: 0.01 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <FormControlLabel
+                control={<Switch checked={autoTradePartialTpEnabled} onChange={(e) => setAutoTradePartialTpEnabled(e.target.checked)} />}
+                label="Partial TP Bertahap"
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Partial TP RR1"
+                type="number"
+                value={autoTradePartialTpRr1}
+                onChange={(e) => setAutoTradePartialTpRr1(Number(e.target.value))}
+                inputProps={{ min: 0.2, max: 10, step: 0.1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Close % Stage 1"
+                type="number"
+                value={autoTradePartialTpClosePct1}
+                onChange={(e) => setAutoTradePartialTpClosePct1(Number(e.target.value))}
+                inputProps={{ min: 1, max: 95, step: 1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Partial TP RR2"
+                type="number"
+                value={autoTradePartialTpRr2}
+                onChange={(e) => setAutoTradePartialTpRr2(Number(e.target.value))}
+                inputProps={{ min: 0.2, max: 20, step: 0.1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Close % Stage 2"
+                type="number"
+                value={autoTradePartialTpClosePct2}
+                onChange={(e) => setAutoTradePartialTpClosePct2(Number(e.target.value))}
+                inputProps={{ min: 1, max: 95, step: 1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <FormControlLabel
+                control={<Switch checked={autoTradeBreakEvenEnabled} onChange={(e) => setAutoTradeBreakEvenEnabled(e.target.checked)} />}
+                label="Break-even Lock"
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Break-even RR"
+                type="number"
+                value={autoTradeBreakEvenRr}
+                onChange={(e) => setAutoTradeBreakEvenRr(Number(e.target.value))}
+                inputProps={{ min: 0.2, max: 10, step: 0.1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="BE Offset ATR Mult"
+                type="number"
+                value={autoTradeBreakEvenOffsetAtrMult}
+                onChange={(e) => setAutoTradeBreakEvenOffsetAtrMult(Number(e.target.value))}
+                inputProps={{ min: 0, max: 2, step: 0.05 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                select
+                size="small"
+                label="Trailing Mode"
+                value={autoTradeTrailingMode}
+                onChange={(e) => setAutoTradeTrailingMode(e.target.value)}
+              >
+                <MenuItem value="stateful_hl">Stateful High/Low</MenuItem>
+                <MenuItem value="atr">ATR Dynamic</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Stateful Trail Buffer ATR"
+                type="number"
+                value={autoTradeStatefulTrailBufferAtrMult}
+                onChange={(e) => setAutoTradeStatefulTrailBufferAtrMult(Number(e.target.value))}
+                inputProps={{ min: 0, max: 5, step: 0.1 }}
+              />
+            </Grid>
             <Grid item xs={12} md={8}>
               <Button variant="contained" onClick={saveAutoTradeConfig} disabled={autoTradeConfigSaving}>
                 {autoTradeConfigSaving ? "Saving..." : "Save Auto Trade Detail"}
@@ -678,6 +1181,14 @@ const setDefaultBroker = async (id) => {
                     <Grid item xs={12} md={3}><Typography variant="caption">Point: {autoTradeConstraints?.constraints?.point ?? "-"}</Typography></Grid>
                     <Grid item xs={12} md={3}><Typography variant="caption">Stops Level: {autoTradeConstraints?.constraints?.trade_stops_level ?? "-"}</Typography></Grid>
                     <Grid item xs={12} md={3}><Typography variant="caption">Freeze Level: {autoTradeConstraints?.constraints?.trade_freeze_level ?? "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Leverage: {autoTradeConstraints?.account_metrics?.leverage || "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Balance: {autoTradeConstraints?.account_metrics?.balance ?? "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Equity: {autoTradeConstraints?.account_metrics?.equity ?? "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Free Margin: {autoTradeConstraints?.account_metrics?.margin_free ?? "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Spread (points): {autoTradeConstraints?.account_metrics?.spread_points ?? "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Est. Margin/Lot: {autoTradeConstraints?.account_metrics?.estimated_margin_per_lot ?? "-"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Can Trade: {autoTradeConstraints?.account_metrics?.can_trade ? "Yes" : "No"}</Typography></Grid>
+                    <Grid item xs={12} md={3}><Typography variant="caption">Metrics Reason: {autoTradeConstraints?.account_metrics?.reason || "-"}</Typography></Grid>
                   </Grid>
                 )}
               </Paper>
