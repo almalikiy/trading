@@ -161,8 +161,9 @@ def open_trade_v2(payload: TradeOpenRequest):
     try:
         adapter, method = get_broker_adapter(broker, method)
         result = adapter.open_trade(payload.symbol, payload.lot, payload.trade_type)
-        entry_price = result.get("order", {}).get("price")
-        ticket = result.get("order", {}).get("ticket")
+        order = result.get("order", {})
+        entry_price = order.get("price") # entry_price = result.get("order", {}).get("price")
+        ticket = order.get("ticket")     # ticket = result.get("order", {}).get("ticket")
 
         now = int(time.time())
         tp_value = state.get("tp_value", 0.5)

@@ -464,15 +464,24 @@ def close_trade(symbol: str = Body(...), lot: float = Body(0.01), ticket: int = 
             return {"status": "error", "message": "Close by ticket hanya tersedia untuk mode direct/API."}
 
         result = adapter.close_trade(symbol or target.get("symbol") or "XAUUSD", lot or float(target.get("lot") or 0.01), ticket)
+        print("DEBUG ini mau assign order binding")
         order = result.get("order", {})
+        exit_price = float(order.get("price") or 0) # safe for SQLite
+        profit = float(order.get("profit") or 0) # safe for SQLite
         close_trade_record(
             target.get("trade_id"),
-            exit_price=order.get("price"),
-            profit=order.get("profit"),
+            exit_price=exit_price,
+            profit=profit,
             exit_time=int(time.time()),
             ticket=ticket,
             reason="close_legacy",
         )
+        print("DEBUG close_trade_record params:", {
+            "trade_id": target.get("trade_id"),
+            "exit_price": exit_price,
+            "profit": profit,
+            "ticket": ticket,
+        })
 
         user_id = "default"
         if user_id in user_open_trade:

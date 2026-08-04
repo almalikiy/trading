@@ -867,8 +867,16 @@ def sync_broker_trade_state(broker, history_days: Optional[int] = 90):
             from_date = datetime(1970, 1, 1)
         else:
             from_date = datetime.now() - timedelta(days=max(1, int(history_days)))
-        to_date = datetime.now() + timedelta(days=1)
-        deals = list(mt5.history_deals_get(from_date, to_date) or [])
+        to_date = datetime.now() # + timedelta(days=1) avoid invalid future date for history_deals_get
+        #deals = list(mt5.history_deals_get(from_date, to_date) or [])
+        deals_raw = mt5.history_deals_get(from_date, to_date)
+        if deals_raw is None:
+            err = mt5.last_error()
+            log_mt5_error(f"history_deals_get failed: {err}", broker_id=broker.get("id"), broker_name=broker.get("name"))
+            deals = []
+        else:
+            deals = list(deals_raw)
+
         deals_by_position = _group_deals_by_position(deals)
         live_tickets = set()
 

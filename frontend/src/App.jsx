@@ -650,7 +650,7 @@ export default function App( { darkMode, setDarkMode }) {
           onClose={() => setSnackbarOpen(false)}
           anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
         >
-          <MuiAlert onClose={() => setSnackbarOpen(false)} severity={signal === "buy" ? "success" : "info"} sx={{ width: "100%" }}>
+          <MuiAlert onClose={() => setSnackbarOpen(false)} severity={snackbarMsg.includes("error") ? "error" : "success"} sx={{ width: "100%" }}>
             {snackbarMsg}
           </MuiAlert>
         </Snackbar>
