@@ -910,10 +910,34 @@ def sync_trade_history_now():
     state = get_account_state()
     history_days = None if state.get("trade_history_sync_all") else int(state.get("trade_history_sync_days") or 90)
     results = sync_all_terminal_trade_state(history_days=history_days)
+    total = len(results)
+    failed = [r for r in results if not bool(r.get("synced")) and not bool(r.get("partial"))]
+    partial = [r for r in results if bool(r.get("partial"))]
+
+    if total == 0:
+        status = "error"
+        message = "Tidak ada broker MT5 aktif untuk sinkronisasi."
+    elif len(failed) == total:
+        status = "error"
+        message = "Sinkronisasi history gagal untuk semua broker."
+    elif failed or partial:
+        status = "partial"
+        message = f"Sinkronisasi parsial: sukses {total - len(failed) - len(partial)}, partial {len(partial)}, gagal {len(failed)}."
+    else:
+        status = "ok"
+        message = "Sinkronisasi history selesai tanpa error."
+
     return {
-        "status": "ok",
+        "status": status,
+        "message": message,
         "trade_history_sync_all": bool(state.get("trade_history_sync_all")),
         "trade_history_sync_days": state.get("trade_history_sync_days"),
+        "summary": {
+            "total": total,
+            "ok": total - len(failed) - len(partial),
+            "partial": len(partial),
+            "failed": len(failed),
+        },
         "results": results,
     }
 

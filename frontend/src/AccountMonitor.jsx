@@ -527,7 +527,21 @@ export default function AccountMonitor() {
         throw new Error(data.message || data.detail || "Sinkronisasi history gagal.");
       }
       const label = data.trade_history_sync_all ? "semua history" : `${data.trade_history_sync_days} hari`;
-      setSnackbar({ open: true, severity: "success", message: `Sinkronisasi history selesai untuk ${label}.` });
+
+      if (data.status === "partial") {
+        const badRows = Array.isArray(data.results)
+          ? data.results.filter((r) => r.partial || (!r.synced && !r.partial))
+          : [];
+        const names = badRows.map((r) => r.broker_name || `broker-${r.broker_id || "unknown"}`).slice(0, 3).join(", ");
+        const suffix = names ? ` Broker bermasalah: ${names}.` : "";
+        setSnackbar({
+          open: true,
+          severity: "warning",
+          message: `${data.message || "Sinkronisasi history parsial."} (${label}).${suffix}`,
+        });
+      } else {
+        setSnackbar({ open: true, severity: "success", message: `Sinkronisasi history selesai untuk ${label}.` });
+      }
     } catch (err) {
       setSnackbar({ open: true, severity: "error", message: err.message || "Tidak bisa menjalankan sinkronisasi history." });
     } finally {

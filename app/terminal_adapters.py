@@ -839,6 +839,51 @@ def _build_closed_trade_from_deals(broker, account_id, ticket, deals_for_positio
     }
 
 
+def _fetch_history_deals_resilient(broker, from_date, to_date):
+    broker_id = broker.get("id")
+    broker_name = broker.get("name")
+
+    try:
+        deals_raw = mt5.history_deals_get(from_date, to_date)
+        if deals_raw is not None:
+            return list(deals_raw), True, "ok"
+        err = mt5.last_error()
+        primary_error = f"history_deals_get failed: {err}"
+        log_mt5_error(primary_error, broker_id=broker_id, broker_name=broker_name)
+    except Exception as exc:
+        primary_error = f"history_deals_get exception: {exc}"
+        log_mt5_error(primary_error, broker_id=broker_id, broker_name=broker_name)
+
+    # Fallback: query in smaller windows to avoid MT5 API failures on large ranges.
+    cursor = from_date
+    chunk_size_days = 7
+    merged = []
+    fallback_errors = []
+    while cursor < to_date:
+        chunk_end = min(cursor + timedelta(days=chunk_size_days), to_date)
+        try:
+            chunk_raw = mt5.history_deals_get(cursor, chunk_end)
+            if chunk_raw is None:
+                err = mt5.last_error()
+                fallback_errors.append(f"{cursor.isoformat()}..{chunk_end.isoformat()}: {err}")
+            else:
+                merged.extend(list(chunk_raw))
+        except Exception as exc:
+            fallback_errors.append(f"{cursor.isoformat()}..{chunk_end.isoformat()}: {exc}")
+        cursor = chunk_end + timedelta(seconds=1)
+
+    if merged:
+        return merged, True, "chunked"
+
+    if fallback_errors:
+        log_mt5_error(
+            "history_deals_get fallback failed: " + " | ".join(fallback_errors[:4]),
+            broker_id=broker_id,
+            broker_name=broker_name,
+        )
+    return [], False, primary_error
+
+
 def sync_broker_trade_state(broker, history_days: Optional[int] = 90):
     broker = broker or {}
     if str(broker.get("platform", "mt5")).lower() != "mt5":
@@ -850,6 +895,8 @@ def sync_broker_trade_state(broker, history_days: Optional[int] = 90):
 
     ensure_terminal_running(terminal_path)
     initialized = False
+    saved_count = 0
+    errors = []
     try:
         initialized = mt5.initialize(path=terminal_path)
         if not initialized:
@@ -861,38 +908,45 @@ def sync_broker_trade_state(broker, history_days: Optional[int] = 90):
             return {"broker_id": broker.get("id"), "synced": False, "reason": "mt5_initialize_failed"}
 
         account = mt5.account_info()
+        if account is None:
+            return {"broker_id": broker.get("id"), "synced": False, "reason": "account_info_failed"}
         account_id = _mt5_account_id(account)
         positions = list(mt5.positions_get() or [])
+
         if history_days is None:
             from_date = datetime(1970, 1, 1)
         else:
             from_date = datetime.now() - timedelta(days=max(1, int(history_days)))
-        to_date = datetime.now() # + timedelta(days=1) avoid invalid future date for history_deals_get
-        #deals = list(mt5.history_deals_get(from_date, to_date) or [])
-        deals_raw = mt5.history_deals_get(from_date, to_date)
-        if deals_raw is None:
-            err = mt5.last_error()
-            log_mt5_error(f"history_deals_get failed: {err}", broker_id=broker.get("id"), broker_name=broker.get("name"))
-            deals = []
-        else:
-            deals = list(deals_raw)
+        to_date = datetime.now() - timedelta(seconds=1)
+        deals, deals_ok, deals_fetch_mode = _fetch_history_deals_resilient(broker, from_date, to_date)
+
 
         deals_by_position = _group_deals_by_position(deals)
         live_tickets = set()
+
 
         for position in positions:
             ticket = int(getattr(position, "ticket", 0) or 0)
             if ticket <= 0:
                 continue
             live_tickets.add(ticket)
-            upsert_trade_history_record(_build_open_trade_from_position(broker, account_id, position, deals_by_position.get(ticket, [])))
+            trade = _build_open_trade_from_position(broker, account_id, position, deals_by_position.get(ticket, []))
+            try:
+                upsert_trade_history_record(trade)
+                saved_count += 1
+            except Exception as e:
+                errors.append({"trade_id": trade.get("trade_id"), "error": str(e)})
 
         for ticket, deals_for_position in deals_by_position.items():
             if ticket in live_tickets:
                 continue
             summary = _build_closed_trade_from_deals(broker, account_id, ticket, deals_for_position)
             if summary:
-                upsert_trade_history_record(summary)
+                try:
+                    upsert_trade_history_record(summary)
+                    saved_count += 1
+                except Exception as e:
+                    errors.append({"trade_id": summary.get("trade_id"), "error": str(e)})
 
         for row in list_open_trades(broker_id=broker.get("id")):
             row_account_id = row.get("account_id")
@@ -937,13 +991,26 @@ def sync_broker_trade_state(broker, history_days: Optional[int] = 90):
                 }
             )
 
+        had_upsert_errors = len(errors) > 0
+        partial = (not deals_ok) or had_upsert_errors
+        sync_reason = "ok"
+        if not deals_ok:
+            sync_reason = "history_deals_fetch_failed"
+        elif had_upsert_errors:
+            sync_reason = "upsert_failed"
+
         return {
             "broker_id": broker.get("id"),
             "broker_name": broker.get("name"),
             "account_id": account_id,
-            "synced": True,
+            "synced": not partial,
+            "partial": partial,
+            "reason": sync_reason,
             "open_positions": len(live_tickets),
             "history_deals": len(deals),
+            "history_fetch_mode": deals_fetch_mode,
+            "saved_count": saved_count,
+            "errors": errors,
         }
     except Exception as exc:
         log_mt5_error(
