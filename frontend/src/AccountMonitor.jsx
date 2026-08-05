@@ -805,9 +805,12 @@ const setDefaultBroker = async (id) => {
                 label="Risk Mode"
                 value={autoTradeRiskMode}
                 onChange={(e) => setAutoTradeRiskMode(e.target.value)}
+                helperText="balance_scaled memakai initial balance; atr_dynamic memakai ATR untuk sizing"
               >
                 <MenuItem value="fixed_lot">Fixed Lot</MenuItem>
                 <MenuItem value="risk_percent">Risk % per Trade</MenuItem>
+                <MenuItem value="balance_scaled">Balance Scaled Lot</MenuItem>
+                <MenuItem value="atr_dynamic">ATR Dynamic Lot</MenuItem>
               </TextField>
             </Grid>
             <Grid item xs={12} md={3}>
@@ -819,8 +822,8 @@ const setDefaultBroker = async (id) => {
                 value={autoTradeRiskPercent}
                 onChange={(e) => setAutoTradeRiskPercent(Number(e.target.value))}
                 inputProps={{ min: 0.1, max: 10, step: 0.1 }}
-                disabled={autoTradeRiskMode !== "risk_percent"}
-                helperText="0.1 - 10%"
+                disabled={autoTradeRiskMode === "fixed_lot" || autoTradeRiskMode === "balance_scaled"}
+                helperText={autoTradeRiskMode === "atr_dynamic" ? "Dipakai sebagai risk budget ATR dynamic" : "0.1 - 10%"}
               />
             </Grid>
             <Grid item xs={12} md={3}>

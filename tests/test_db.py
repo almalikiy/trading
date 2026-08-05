@@ -222,3 +222,81 @@ def test_upsert_trade_history_record_backfills_open_trade_ticket_and_account(tmp
     assert open_rows[0]["trade_id"] == "existing-open"
     assert open_rows[0]["ticket"] == 445566
     assert open_rows[0]["account_id"] == 998877
+
+
+def test_auto_trade_profile_history_is_recorded(tmp_path):
+    db.DB_PATH = str(tmp_path / "test.db")
+    db.init_db()
+
+    state = db.get_account_state()
+    state["auto_trade_risk_mode"] = "atr_dynamic"
+    state["auto_trade_risk_percent"] = 1.7
+    state["profile_note"] = "unit-test"
+    state["profile_source"] = "test"
+    db.save_auto_trade_profile(7, 123456, state)
+
+    history = db.get_auto_trade_profile_history(broker_id=7, account_id=123456, limit=10)
+    assert len(history) == 1
+    assert history[0]["profile"]["auto_trade_risk_mode"] == "atr_dynamic"
+    assert history[0]["note"] == "unit-test"
+    assert history[0]["source"] == "test"
+
+
+def test_auto_trade_event_persistence_and_statistics(tmp_path):
+    db.DB_PATH = str(tmp_path / "test.db")
+    db.init_db()
+
+    db.log_auto_trade_event(
+        {
+            "timestamp": 1725000000,
+            "event_type": "analysis",
+            "broker_id": 1,
+            "broker_name": "Default Broker",
+            "account_id": 998877,
+            "symbol": "XAUUSD",
+            "signal": "buy",
+            "signal_score": 0.62,
+            "spread_points": 90,
+            "margin_usage_pct": 40.0,
+            "atr_value": 12.5,
+            "session_hour": 9,
+        }
+    )
+    db.create_trade_open_record(
+        {
+            "trade_id": "trade-1",
+            "type": "BUY",
+            "symbol": "XAUUSD",
+            "lot": 0.1,
+            "ticket": 111,
+            "entry": 2300.0,
+            "entryTime": 1725000000,
+            "reason": "auto_open:0.620",
+            "tpValue": 25.0,
+            "slValue": 10.0,
+            "broker_id": 1,
+            "broker_name": "Default Broker",
+            "account_id": 998877,
+            "platform": "mt5",
+            "execution_mode": "direct",
+            "terminal_path": "C:/Terminal/terminal64.exe",
+            "trailing_mode": "stateful_hl",
+            "risk_mode": "atr_dynamic",
+            "signal_score": 0.62,
+            "spread_points": 90,
+            "margin_usage_pct": 40.0,
+            "equity": 1200.0,
+            "balance": 1000.0,
+            "atr_value": 12.5,
+            "session_hour": 9,
+        }
+    )
+    db.close_trade_record("trade-1", exit_price=2310.0, profit=85.0, exit_time=1725003600, ticket=111, reason="take_profit")
+
+    stats = db.get_auto_trade_statistics(window_days=3650, broker_id=1, account_id=998877)
+    assert stats["closed_trades"] == 1
+    assert stats["wins"] == 1
+    assert stats["winrate"] == 100.0
+    assert stats["signal_blocks"] == 0
+    assert stats["average_signal_score"] == 0.62
+    assert stats["trailing_mode_performance"][0]["mode"] == "stateful_hl"

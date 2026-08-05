@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, Query, Body
-from .db import get_account_state, save_account_state, insert_trade, get_trade_history, get_broker, get_default_broker, get_open_trades_count, list_open_trades, close_trade_record, resolve_feed_broker, update_open_trade_tpsl, apply_auto_trade_profile_to_state, save_auto_trade_profile, has_auto_trade_profile
+from .db import get_account_state, save_account_state, insert_trade, get_trade_history, get_broker, get_default_broker, get_open_trades_count, list_open_trades, close_trade_record, resolve_feed_broker, update_open_trade_tpsl, apply_auto_trade_profile_to_state, save_auto_trade_profile, has_auto_trade_profile, get_auto_trade_statistics, get_auto_trade_profile_history
 router = APIRouter()
 from .logic import log_mt5_error
 from datetime import datetime
@@ -476,6 +476,22 @@ def get_auto_trade_runtime():
         "runtime": get_auto_trader_runtime_status(),
     }
 
+
+@router.get("/account/auto_trade_profile_history")
+def get_auto_trade_profile_history_route(limit: int = 100, broker_id: int | None = None, account_id: int | None = None):
+    return {
+        "status": "ok",
+        "history": get_auto_trade_profile_history(broker_id=broker_id, account_id=account_id, limit=limit),
+    }
+
+
+@router.get("/account/auto_trade_stats")
+def get_auto_trade_stats_route(window_days: int = 30, broker_id: int | None = None, account_id: int | None = None):
+    return {
+        "status": "ok",
+        "stats": get_auto_trade_statistics(window_days=window_days, broker_id=broker_id, account_id=account_id),
+    }
+
 # === Real Trade Execution Endpoints ===
 
 @router.post("/trade/open")
@@ -736,8 +752,8 @@ def set_auto_trade_config(payload: AutoTradeConfigRequest):
 
     if payload.risk_mode is not None:
         risk_mode = str(payload.risk_mode).strip().lower()
-        if risk_mode not in ("fixed_lot", "risk_percent"):
-            return {"status": "error", "message": "Risk mode harus fixed_lot atau risk_percent."}
+        if risk_mode not in ("fixed_lot", "risk_percent", "balance_scaled", "atr_dynamic"):
+            return {"status": "error", "message": "Risk mode harus fixed_lot, risk_percent, balance_scaled, atau atr_dynamic."}
         state["auto_trade_risk_mode"] = risk_mode
 
     if payload.risk_percent is not None:

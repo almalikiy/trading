@@ -74,6 +74,10 @@ def _add_column_if_missing(conn, table_name, column_name, sql_type):
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {sql_type}")
 
 
+def _serialize_profile_payload(profile_dict):
+    return {k: profile_dict.get(k) for k in AUTO_TRADE_PROFILE_KEYS if k in profile_dict}
+
+
 def init_db():
     with get_db() as conn:
         conn.execute(
@@ -287,6 +291,61 @@ def init_db():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auto_trade_profile_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                broker_id INTEGER NOT NULL,
+                account_id INTEGER NOT NULL,
+                profile_json TEXT NOT NULL,
+                note TEXT,
+                source TEXT,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auto_trade_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp INTEGER NOT NULL,
+                broker_id INTEGER,
+                broker_name TEXT,
+                account_id INTEGER,
+                symbol TEXT,
+                trade_id TEXT,
+                event_type TEXT NOT NULL,
+                decision TEXT,
+                reason TEXT,
+                signal TEXT,
+                signal_score REAL,
+                spread_points INTEGER,
+                max_spread_points INTEGER,
+                margin_free REAL,
+                equity REAL,
+                balance REAL,
+                margin_usage_pct REAL,
+                atr_value REAL,
+                trailing_mode TEXT,
+                risk_mode TEXT,
+                lot_mode TEXT,
+                lot REAL,
+                profit REAL,
+                rr REAL,
+                session_hour INTEGER,
+                payload_json TEXT
+            )
+            """
+        )
+        _add_column_if_missing(conn, "trade_history", "trailing_mode", "TEXT")
+        _add_column_if_missing(conn, "trade_history", "risk_mode", "TEXT")
+        _add_column_if_missing(conn, "trade_history", "signal_score", "REAL")
+        _add_column_if_missing(conn, "trade_history", "spread_points", "INTEGER")
+        _add_column_if_missing(conn, "trade_history", "margin_usage_pct", "REAL")
+        _add_column_if_missing(conn, "trade_history", "equity", "REAL")
+        _add_column_if_missing(conn, "trade_history", "balance", "REAL")
+        _add_column_if_missing(conn, "trade_history", "atr_value", "REAL")
+        _add_column_if_missing(conn, "trade_history", "session_hour", "INTEGER")
 
         conn.execute(
             """
@@ -722,9 +781,11 @@ def append_trade_history(trade):
                 trade_id, status, type, symbol, lot, ticket,
                 entry, exit, profit, entryTime, exitTime, reason,
                 tpValue, slValue, broker_id, broker_name, account_id,
-                platform, execution_mode, terminal_path
+                platform, execution_mode, terminal_path,
+                trailing_mode, risk_mode, signal_score, spread_points,
+                margin_usage_pct, equity, balance, atr_value, session_hour
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade.get("trade_id"),
@@ -747,6 +808,15 @@ def append_trade_history(trade):
                 trade.get("platform"),
                 trade.get("execution_mode"),
                 trade.get("terminal_path"),
+                trade.get("trailing_mode"),
+                trade.get("risk_mode"),
+                trade.get("signal_score"),
+                trade.get("spread_points"),
+                trade.get("margin_usage_pct"),
+                trade.get("equity"),
+                trade.get("balance"),
+                trade.get("atr_value"),
+                trade.get("session_hour"),
             ),
         )
 
@@ -798,9 +868,11 @@ def create_trade_open_record(trade):
                 trade_id, status, type, symbol, lot, ticket,
                 entry, exit, profit, entryTime, exitTime, reason,
                 tpValue, slValue, broker_id, broker_name, account_id, platform,
-                execution_mode, terminal_path
+                execution_mode, terminal_path,
+                trailing_mode, risk_mode, signal_score, spread_points,
+                margin_usage_pct, equity, balance, atr_value, session_hour
             )
-            VALUES (?, 'open', ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, 'open', ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade.get("trade_id"),
@@ -819,6 +891,15 @@ def create_trade_open_record(trade):
                 trade.get("platform"),
                 trade.get("execution_mode"),
                 trade.get("terminal_path"),
+                trade.get("trailing_mode"),
+                trade.get("risk_mode"),
+                trade.get("signal_score"),
+                trade.get("spread_points"),
+                trade.get("margin_usage_pct"),
+                trade.get("equity"),
+                trade.get("balance"),
+                trade.get("atr_value"),
+                trade.get("session_hour"),
             ),
         )
 
@@ -1233,7 +1314,7 @@ def save_auto_trade_profile(broker_id, account_id, profile_dict):
     if broker_id is None or account_id is None:
         return False
     now = int(time.time())
-    payload = {k: profile_dict.get(k) for k in AUTO_TRADE_PROFILE_KEYS if k in profile_dict}
+    payload = _serialize_profile_payload(profile_dict or {})
     with get_db() as conn:
         conn.execute(
             """
@@ -1244,6 +1325,20 @@ def save_auto_trade_profile(broker_id, account_id, profile_dict):
                 updated_at = excluded.updated_at
             """,
             (int(broker_id), int(account_id), json.dumps(payload, ensure_ascii=True), now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO auto_trade_profile_history (broker_id, account_id, profile_json, note, source, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(broker_id),
+                int(account_id),
+                json.dumps(payload, ensure_ascii=True),
+                str((profile_dict or {}).get("profile_note") or "save"),
+                str((profile_dict or {}).get("profile_source") or "api"),
+                now,
+            ),
         )
     return True
 
@@ -1257,6 +1352,404 @@ def apply_auto_trade_profile_to_state(base_state, broker_id, account_id):
         if key in profile:
             state[key] = profile[key]
     return state
+
+
+def get_auto_trade_profile_history(broker_id=None, account_id=None, limit=200):
+    with get_db() as conn:
+        clauses = []
+        params = []
+        if broker_id is not None:
+            clauses.append("broker_id = ?")
+            params.append(int(broker_id))
+        if account_id is not None:
+            clauses.append("account_id = ?")
+            params.append(int(account_id))
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = conn.execute(
+            f"""
+            SELECT broker_id, account_id, profile_json, note, source, created_at
+            FROM auto_trade_profile_history
+            {where_sql}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (*params, int(limit)),
+        ).fetchall()
+    result = []
+    for row in rows:
+        try:
+            profile = json.loads(row["profile_json"] or "{}")
+        except Exception:
+            profile = {}
+        result.append(
+            {
+                "broker_id": row["broker_id"],
+                "account_id": row["account_id"],
+                "profile": profile if isinstance(profile, dict) else {},
+                "note": row["note"],
+                "source": row["source"],
+                "created_at": row["created_at"],
+            }
+        )
+    return result
+
+
+def log_auto_trade_event(event):
+    if not event:
+        return False
+    payload = dict(event or {})
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO auto_trade_events (
+                timestamp, broker_id, broker_name, account_id, symbol, trade_id,
+                event_type, decision, reason, signal, signal_score,
+                spread_points, max_spread_points, margin_free, equity, balance,
+                margin_usage_pct, atr_value, trailing_mode, risk_mode, lot_mode,
+                lot, profit, rr, session_hour, payload_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(payload.get("timestamp") or time.time()),
+                payload.get("broker_id"),
+                payload.get("broker_name"),
+                payload.get("account_id"),
+                payload.get("symbol"),
+                payload.get("trade_id"),
+                payload.get("event_type") or "analysis",
+                payload.get("decision"),
+                payload.get("reason"),
+                payload.get("signal"),
+                payload.get("signal_score"),
+                payload.get("spread_points"),
+                payload.get("max_spread_points"),
+                payload.get("margin_free"),
+                payload.get("equity"),
+                payload.get("balance"),
+                payload.get("margin_usage_pct"),
+                payload.get("atr_value"),
+                payload.get("trailing_mode"),
+                payload.get("risk_mode"),
+                payload.get("lot_mode"),
+                payload.get("lot"),
+                payload.get("profit"),
+                payload.get("rr"),
+                payload.get("session_hour"),
+                json.dumps(payload.get("payload") or {}, ensure_ascii=True, default=str),
+            ),
+        )
+    return True
+
+
+def get_auto_trade_events(limit=1000, broker_id=None, account_id=None, event_type=None, since=None):
+    with get_db() as conn:
+        clauses = []
+        params = []
+        if broker_id is not None:
+            clauses.append("broker_id = ?")
+            params.append(int(broker_id))
+        if account_id is not None:
+            clauses.append("account_id = ?")
+            params.append(int(account_id))
+        if event_type:
+            clauses.append("event_type = ?")
+            params.append(str(event_type))
+        if since is not None:
+            clauses.append("timestamp >= ?")
+            params.append(int(since))
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = conn.execute(
+            f"""
+            SELECT timestamp, broker_id, broker_name, account_id, symbol, trade_id,
+                   event_type, decision, reason, signal, signal_score,
+                   spread_points, max_spread_points, margin_free, equity, balance,
+                   margin_usage_pct, atr_value, trailing_mode, risk_mode, lot_mode,
+                   lot, profit, rr, session_hour, payload_json
+            FROM auto_trade_events
+            {where_sql}
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?
+            """,
+            (*params, int(limit)),
+        ).fetchall()
+    result = []
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except Exception:
+            payload = {}
+        result.append(
+            {
+                "timestamp": row["timestamp"],
+                "broker_id": row["broker_id"],
+                "broker_name": row["broker_name"],
+                "account_id": row["account_id"],
+                "symbol": row["symbol"],
+                "trade_id": row["trade_id"],
+                "event_type": row["event_type"],
+                "decision": row["decision"],
+                "reason": row["reason"],
+                "signal": row["signal"],
+                "signal_score": row["signal_score"],
+                "spread_points": row["spread_points"],
+                "max_spread_points": row["max_spread_points"],
+                "margin_free": row["margin_free"],
+                "equity": row["equity"],
+                "balance": row["balance"],
+                "margin_usage_pct": row["margin_usage_pct"],
+                "atr_value": row["atr_value"],
+                "trailing_mode": row["trailing_mode"],
+                "risk_mode": row["risk_mode"],
+                "lot_mode": row["lot_mode"],
+                "lot": row["lot"],
+                "profit": row["profit"],
+                "rr": row["rr"],
+                "session_hour": row["session_hour"],
+                "payload": payload if isinstance(payload, dict) else {},
+            }
+        )
+    return result
+
+
+def _trade_rr(row):
+    try:
+        lot = float(row.get("lot") or 0.0)
+        sl_value = float(row.get("slValue") or 0.0)
+        profit = float(row.get("profit") or 0.0)
+    except Exception:
+        return None
+    if lot <= 0 or sl_value == 0:
+        return None
+    risk_amount = abs(sl_value) * 100.0 * lot
+    if risk_amount <= 0:
+        return None
+    return profit / risk_amount
+
+
+def get_auto_trade_statistics(window_days=30, broker_id=None, account_id=None):
+    window_days = max(1, min(int(window_days or 30), 3650))
+    since = int(time.time()) - (window_days * 86400)
+
+    events = get_auto_trade_events(limit=50000, broker_id=broker_id, account_id=account_id, since=since)
+    open_success_map = {}
+    for event in events:
+        if event.get("event_type") == "open_success" and event.get("trade_id"):
+            open_success_map[str(event.get("trade_id"))] = event
+
+    with get_db() as conn:
+        clauses = ["status = 'closed'", "COALESCE(exitTime, entryTime, 0) >= ?"]
+        params = [since]
+        if broker_id is not None:
+            clauses.append("COALESCE(broker_id, -1) = ?")
+            params.append(int(broker_id))
+        if account_id is not None:
+            clauses.append("COALESCE(account_id, -1) = ?")
+            params.append(int(account_id))
+        rows = conn.execute(
+            f"""
+            SELECT trade_id, type, symbol, lot, ticket, entry, exit, profit, entryTime, exitTime,
+                   reason, tpValue, slValue, broker_id, broker_name, account_id, platform,
+                   execution_mode, terminal_path, trailing_mode, risk_mode, signal_score,
+                   spread_points, margin_usage_pct, equity, balance, atr_value, session_hour
+            FROM trade_history
+            WHERE {' AND '.join(clauses)}
+            ORDER BY COALESCE(exitTime, entryTime, 0) ASC, id ASC
+            """,
+            params,
+        ).fetchall()
+
+    closed_trades = [dict(row) for row in rows]
+    total_closed = len(closed_trades)
+    wins = 0
+    losses = 0
+    net_profit = 0.0
+    gross_profit = 0.0
+    gross_loss = 0.0
+    running = 0.0
+    peak = 0.0
+    max_drawdown = 0.0
+    rr_values = []
+    hour_map = {}
+    mode_map = {}
+    symbol_map = {}
+    signal_bucket_map = {
+        "lt_055": {"count": 0, "wins": 0},
+        "055_060": {"count": 0, "wins": 0},
+        "060_070": {"count": 0, "wins": 0},
+        "gte_070": {"count": 0, "wins": 0},
+    }
+
+    for row in closed_trades:
+        profit = float(row.get("profit") or 0.0)
+        net_profit += profit
+        if profit > 0:
+            wins += 1
+            gross_profit += profit
+        elif profit < 0:
+            losses += 1
+            gross_loss += abs(profit)
+
+        running += profit
+        peak = max(peak, running)
+        max_drawdown = max(max_drawdown, peak - running)
+
+        rr = _trade_rr(row)
+        if rr is not None:
+            rr_values.append(rr)
+
+        session_hour = row.get("session_hour")
+        if session_hour is None:
+            entry_time = int(row.get("entryTime") or 0)
+            if entry_time > 0:
+                session_hour = time.localtime(entry_time).tm_hour
+        if session_hour is not None:
+            hour_bucket = hour_map.setdefault(int(session_hour), {"count": 0, "wins": 0, "profit": 0.0})
+            hour_bucket["count"] += 1
+            hour_bucket["profit"] += profit
+            if profit > 0:
+                hour_bucket["wins"] += 1
+
+        mode = row.get("trailing_mode") or (open_success_map.get(str(row.get("trade_id"))) or {}).get("trailing_mode") or "unknown"
+        mode_bucket = mode_map.setdefault(str(mode), {"count": 0, "wins": 0, "profit": 0.0, "rr_sum": 0.0, "rr_count": 0})
+        mode_bucket["count"] += 1
+        mode_bucket["profit"] += profit
+        if profit > 0:
+            mode_bucket["wins"] += 1
+        if rr is not None:
+            mode_bucket["rr_sum"] += rr
+            mode_bucket["rr_count"] += 1
+
+        symbol = str(row.get("symbol") or "-")
+        symbol_bucket = symbol_map.setdefault(symbol, {"count": 0, "wins": 0, "profit": 0.0, "atr_sum": 0.0, "atr_count": 0})
+        symbol_bucket["count"] += 1
+        symbol_bucket["profit"] += profit
+        if profit > 0:
+            symbol_bucket["wins"] += 1
+        atr_value = row.get("atr_value")
+        if atr_value is None:
+            atr_value = (open_success_map.get(str(row.get("trade_id"))) or {}).get("atr_value")
+        try:
+            atr_value = float(atr_value)
+        except Exception:
+            atr_value = None
+        if atr_value is not None and atr_value > 0:
+            symbol_bucket["atr_sum"] += atr_value
+            symbol_bucket["atr_count"] += 1
+
+        signal_score = row.get("signal_score")
+        if signal_score is None:
+            signal_score = (open_success_map.get(str(row.get("trade_id"))) or {}).get("signal_score")
+        try:
+            signal_score = float(signal_score)
+        except Exception:
+            signal_score = None
+        if signal_score is not None:
+            if signal_score < 0.55:
+                bucket = signal_bucket_map["lt_055"]
+            elif signal_score < 0.60:
+                bucket = signal_bucket_map["055_060"]
+            elif signal_score < 0.70:
+                bucket = signal_bucket_map["060_070"]
+            else:
+                bucket = signal_bucket_map["gte_070"]
+            bucket["count"] += 1
+            if profit > 0:
+                bucket["wins"] += 1
+
+    analysis_events = [e for e in events if e.get("event_type") == "analysis"]
+    blocked_events = [e for e in events if e.get("event_type") == "blocked"]
+    spread_blocks = [e for e in blocked_events if e.get("reason") == "spread_too_high"]
+    margin_blocks = [e for e in blocked_events if e.get("reason") == "margin_guard_blocked"]
+    signal_blocks = [e for e in blocked_events if e.get("reason") == "signal_score_below_threshold"]
+
+    signal_scores = [float(e["signal_score"]) for e in analysis_events if e.get("signal_score") is not None]
+    spread_points = [float(e["spread_points"]) for e in analysis_events if e.get("spread_points") is not None]
+    margin_usage = [float(e["margin_usage_pct"]) for e in analysis_events if e.get("margin_usage_pct") is not None]
+
+    spread_block_by_broker = {}
+    for event in spread_blocks:
+        broker = event.get("broker_name") or "-"
+        spread_block_by_broker[broker] = spread_block_by_broker.get(broker, 0) + 1
+
+    return {
+        "window_days": window_days,
+        "since": since,
+        "closed_trades": total_closed,
+        "wins": wins,
+        "losses": losses,
+        "winrate": (wins / total_closed * 100.0) if total_closed else 0.0,
+        "net_profit": net_profit,
+        "average_profit": (net_profit / total_closed) if total_closed else 0.0,
+        "gross_profit": gross_profit,
+        "gross_loss": gross_loss,
+        "profit_factor": (gross_profit / gross_loss) if gross_loss > 0 else None,
+        "average_rr": (sum(rr_values) / len(rr_values)) if rr_values else 0.0,
+        "max_drawdown": max_drawdown,
+        "average_signal_score": (sum(signal_scores) / len(signal_scores)) if signal_scores else None,
+        "average_spread_points": (sum(spread_points) / len(spread_points)) if spread_points else None,
+        "average_margin_usage_pct": (sum(margin_usage) / len(margin_usage)) if margin_usage else None,
+        "signal_blocks": len(signal_blocks),
+        "spread_blocks": len(spread_blocks),
+        "margin_blocks": len(margin_blocks),
+        "spread_block_by_broker": sorted(
+            [{"broker": broker, "count": count} for broker, count in spread_block_by_broker.items()],
+            key=lambda item: item["count"],
+            reverse=True,
+        ),
+        "profit_distribution": {
+            "loss": len([r for r in closed_trades if float(r.get("profit") or 0.0) < 0]),
+            "breakeven": len([r for r in closed_trades if abs(float(r.get("profit") or 0.0)) < 1e-9]),
+            "win": wins,
+        },
+        "signal_score_distribution": {
+            key: {
+                "count": value["count"],
+                "winrate": (value["wins"] / value["count"] * 100.0) if value["count"] else 0.0,
+            }
+            for key, value in signal_bucket_map.items()
+        },
+        "session_performance": sorted(
+            [
+                {
+                    "hour": hour,
+                    "count": value["count"],
+                    "winrate": (value["wins"] / value["count"] * 100.0) if value["count"] else 0.0,
+                    "profit": value["profit"],
+                }
+                for hour, value in hour_map.items()
+            ],
+            key=lambda item: item["hour"],
+        ),
+        "trailing_mode_performance": sorted(
+            [
+                {
+                    "mode": mode,
+                    "count": value["count"],
+                    "winrate": (value["wins"] / value["count"] * 100.0) if value["count"] else 0.0,
+                    "average_rr": (value["rr_sum"] / value["rr_count"]) if value["rr_count"] else 0.0,
+                    "profit": value["profit"],
+                }
+                for mode, value in mode_map.items()
+            ],
+            key=lambda item: item["count"],
+            reverse=True,
+        ),
+        "symbol_volatility": sorted(
+            [
+                {
+                    "symbol": symbol,
+                    "count": value["count"],
+                    "winrate": (value["wins"] / value["count"] * 100.0) if value["count"] else 0.0,
+                    "average_atr": (value["atr_sum"] / value["atr_count"]) if value["atr_count"] else None,
+                    "profit": value["profit"],
+                }
+                for symbol, value in symbol_map.items()
+            ],
+            key=lambda item: item["count"],
+            reverse=True,
+        ),
+    }
 
 
 def _normalize_broker_execution_mode(platform, execution_mode):

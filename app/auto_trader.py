@@ -16,6 +16,7 @@ from .db import (
     list_brokers,
     list_open_trades,
     log_mt5_error,
+    log_auto_trade_event,
     resolve_feed_broker,
     save_account_state,
     update_open_trade_tpsl,
@@ -587,12 +588,35 @@ def _last_auto_action_at():
     return 0
 
 
-def _risk_based_lot(state, constraints, metrics, manual_lot, sl_value):
+def _risk_based_lot(state, constraints, metrics, manual_lot, sl_value, atr_value=None):
     risk_mode = str(state.get("auto_trade_risk_mode") or "fixed_lot").strip().lower()
-    if risk_mode != "risk_percent":
+    if risk_mode == "fixed_lot":
+        return float(manual_lot)
+
+    balance = _coerce_float((metrics or {}).get("balance"), _coerce_float(state.get("balance"), 0.0))
+    equity = _coerce_float((metrics or {}).get("equity"), balance)
+    reference_balance = _coerce_float(state.get("initial_balance"), balance)
+
+    if risk_mode == "balance_scaled":
+        if reference_balance <= 0:
+            return float(manual_lot)
+        scale_base = equity if bool(state.get("auto_trade_use_available_margin", True)) else balance
+        if scale_base <= 0:
+            return float(manual_lot)
+        return max(0.0, float(manual_lot) * (scale_base / reference_balance))
+
+    if risk_mode not in ("risk_percent", "atr_dynamic"):
         return float(manual_lot)
 
     sl = _coerce_float(sl_value, 0.0)
+    if risk_mode == "atr_dynamic" and sl <= 0:
+        atr_mult = max(0.2, min(10.0, _coerce_float(state.get("auto_trade_atr_sl_mult"), 1.5)))
+        atr_source = _coerce_float(atr_value, 0.0)
+        if atr_source <= 0:
+            atr_source = _coerce_float((metrics or {}).get("atr_value"), 0.0)
+        if atr_source > 0:
+            sl = atr_source * atr_mult
+
     if sl <= 0:
         return float(manual_lot)
 
@@ -713,6 +737,7 @@ def _run_auto_trade_cycle():
     raw_signal = str(signal_payload.get("signal") or "wait").lower()
     signal_scoring = _signal_strength(signal_payload, state)
     signal = raw_signal if raw_signal in ("buy", "sell") else signal_scoring.get("direction", "wait")
+    current_hour = datetime.now().hour
     _diag_event(
         "analysis",
         "signal_ready",
@@ -733,12 +758,36 @@ def _run_auto_trade_cycle():
             signal=signal,
             signal_score=_coerce_float(signal_scoring.get("score"), 0.0),
         )
+        log_auto_trade_event(
+            {
+                "timestamp": int(time.time()),
+                "event_type": "blocked",
+                "reason": "signal_score_below_threshold",
+                "broker_id": (auto_open_broker or {}).get("id") if auto_open_broker else None,
+                "broker_name": (auto_open_broker or {}).get("name") if auto_open_broker else None,
+                "account_id": (auto_open_broker or {}).get("account_id") if auto_open_broker else None,
+                "symbol": symbol,
+                "signal": signal,
+                "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+                "session_hour": current_hour,
+            }
+        )
         signal = "wait"
 
     atr_value = _resolve_atr_value(signal_payload)
 
     if signal == "sell" and not bool(state.get("auto_trade_allow_sell", True)):
         _diag_event("skip", "sell_disabled", symbol=symbol, signal=signal)
+        log_auto_trade_event(
+            {
+                "timestamp": int(time.time()),
+                "event_type": "blocked",
+                "reason": "sell_disabled",
+                "symbol": symbol,
+                "signal": signal,
+                "session_hour": current_hour,
+            }
+        )
         signal = "wait"
 
     open_rows = list_open_trades()
@@ -750,6 +799,7 @@ def _run_auto_trade_cycle():
         if not broker:
             _diag_open_attempt("error", reason="no_broker", symbol=symbol, signal=signal)
             _diag_event("skip", "no_broker_for_open", symbol=symbol, signal=signal)
+            log_auto_trade_event({"timestamp": int(time.time()), "event_type": "blocked", "reason": "no_broker", "symbol": symbol, "signal": signal, "session_hour": current_hour})
             return
         broker_status = probe_broker_order_status(broker, symbol=symbol, auto_start=True)
         if not broker_status.get("can_open_order"):
@@ -767,6 +817,19 @@ def _run_auto_trade_cycle():
                 symbol=symbol,
                 signal=signal,
                 signal_score=_coerce_float(signal_scoring.get("score"), 0.0),
+            )
+            log_auto_trade_event(
+                {
+                    "timestamp": int(time.time()),
+                    "event_type": "blocked",
+                    "reason": "broker_not_ready",
+                    "broker_id": broker.get("id"),
+                    "broker_name": broker.get("name"),
+                    "symbol": symbol,
+                    "signal": signal,
+                    "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+                    "session_hour": current_hour,
+                }
             )
             return
 
@@ -786,6 +849,35 @@ def _run_auto_trade_cycle():
                 signal=signal,
             )
             _diag_event("skip", "spread_too_high", symbol=symbol, signal=signal)
+            margin_usage_pct = None
+            margin_free = _coerce_float((metrics or {}).get("margin_free"), 0.0)
+            equity = _coerce_float((metrics or {}).get("equity"), _coerce_float((metrics or {}).get("balance"), 0.0))
+            estimated_margin = _coerce_float((metrics or {}).get("estimated_margin_per_lot"), 0.0) * max(0.0, _coerce_float(state.get("lot"), 0.0))
+            if margin_free > 0 and estimated_margin > 0:
+                margin_usage_pct = (estimated_margin / margin_free) * 100.0
+            log_auto_trade_event(
+                {
+                    "timestamp": int(time.time()),
+                    "event_type": "blocked",
+                    "reason": "spread_too_high",
+                    "broker_id": broker.get("id"),
+                    "broker_name": broker.get("name"),
+                    "account_id": (metrics or {}).get("account_id"),
+                    "symbol": symbol,
+                    "signal": signal,
+                    "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+                    "spread_points": spread_points,
+                    "max_spread_points": max_spread_points,
+                    "margin_free": margin_free,
+                    "equity": equity,
+                    "balance": _coerce_float((metrics or {}).get("balance"), equity),
+                    "margin_usage_pct": margin_usage_pct,
+                    "atr_value": atr_value,
+                    "trailing_mode": state.get("auto_trade_trailing_mode"),
+                    "risk_mode": state.get("auto_trade_risk_mode"),
+                    "session_hour": current_hour,
+                }
+            )
             return
 
         manual_lot = _coerce_float(state.get("lot"), 0.01)
@@ -794,7 +886,7 @@ def _run_auto_trade_cycle():
             sl_for_risk = round(1 * manual_lot, 2)
         if bool(state.get("auto_trade_use_atr_tpsl", True)) and atr_value and atr_value > 0:
             sl_for_risk = atr_value * max(0.2, min(10.0, _coerce_float(state.get("auto_trade_atr_sl_mult"), 1.5)))
-        lot_to_open = _risk_based_lot(state, constraints, metrics, manual_lot, sl_for_risk)
+        lot_to_open = _risk_based_lot(state, constraints, metrics, manual_lot, sl_for_risk, atr_value=atr_value)
 
         if constraints.get("can_open_order") and constraints.get("volume_step"):
             lot_to_open = normalize_lot_with_constraints(lot_to_open, constraints)
@@ -802,11 +894,34 @@ def _run_auto_trade_cycle():
         if lot_to_open <= 0:
             _diag_open_attempt("error", reason="lot_to_open_zero", broker_name=broker.get("name"), symbol=symbol, signal=signal)
             _diag_event("skip", "lot_to_open_zero", symbol=symbol, signal=signal)
+            log_auto_trade_event({"timestamp": int(time.time()), "event_type": "blocked", "reason": "lot_to_open_zero", "broker_id": broker.get("id"), "broker_name": broker.get("name"), "account_id": (metrics or {}).get("account_id"), "symbol": symbol, "signal": signal, "signal_score": _coerce_float(signal_scoring.get("score"), 0.0), "atr_value": atr_value, "session_hour": current_hour})
             return
 
         if not _passes_margin_guards(state, metrics, lot_to_open):
             _diag_open_attempt("error", reason="margin_guard_blocked", broker_name=broker.get("name"), symbol=symbol, signal=signal)
             _diag_event("skip", "margin_guard_blocked", symbol=symbol, signal=signal)
+            log_auto_trade_event(
+                {
+                    "timestamp": int(time.time()),
+                    "event_type": "blocked",
+                    "reason": "margin_guard_blocked",
+                    "broker_id": broker.get("id"),
+                    "broker_name": broker.get("name"),
+                    "account_id": (metrics or {}).get("account_id"),
+                    "symbol": symbol,
+                    "signal": signal,
+                    "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+                    "margin_free": _coerce_float((metrics or {}).get("margin_free"), 0.0),
+                    "equity": _coerce_float((metrics or {}).get("equity"), _coerce_float((metrics or {}).get("balance"), 0.0)),
+                    "balance": _coerce_float((metrics or {}).get("balance"), 0.0),
+                    "margin_usage_pct": None,
+                    "atr_value": atr_value,
+                    "trailing_mode": state.get("auto_trade_trailing_mode"),
+                    "risk_mode": state.get("auto_trade_risk_mode"),
+                    "lot": lot_to_open,
+                    "session_hour": current_hour,
+                }
+            )
             return
 
         if abs(lot_to_open - manual_lot) > 1e-9:
@@ -837,6 +952,25 @@ def _run_auto_trade_cycle():
                 error=str(exc),
             )
             _diag_event("skip", "open_trade_exception", symbol=symbol, signal=signal)
+            log_auto_trade_event(
+                {
+                    "timestamp": int(time.time()),
+                    "event_type": "open_error",
+                    "reason": "open_trade_exception",
+                    "broker_id": broker.get("id"),
+                    "broker_name": broker.get("name"),
+                    "account_id": (metrics or {}).get("account_id"),
+                    "symbol": symbol,
+                    "signal": signal,
+                    "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+                    "lot": lot_to_open,
+                    "trailing_mode": state.get("auto_trade_trailing_mode"),
+                    "risk_mode": state.get("auto_trade_risk_mode"),
+                    "atr_value": atr_value,
+                    "session_hour": current_hour,
+                    "payload": {"error": str(exc)},
+                }
+            )
             raise
         order = result.get("order", {})
         now = int(time.time())
@@ -862,6 +996,35 @@ def _run_auto_trade_cycle():
                 "platform": broker.get("platform"),
                 "execution_mode": method,
                 "terminal_path": broker.get("terminal_path"),
+            }
+        )
+        estimated_margin = _coerce_float((metrics or {}).get("estimated_margin_per_lot"), 0.0) * max(0.0, lot_to_open)
+        margin_free = _coerce_float((metrics or {}).get("margin_free"), 0.0)
+        equity = _coerce_float((metrics or {}).get("equity"), _coerce_float((metrics or {}).get("balance"), 0.0))
+        margin_usage_pct = (estimated_margin / margin_free) * 100.0 if margin_free > 0 and estimated_margin > 0 else None
+        log_auto_trade_event(
+            {
+                "timestamp": now,
+                "event_type": "open_success",
+                "trade_id": trade_id,
+                "broker_id": broker.get("id"),
+                "broker_name": broker.get("name"),
+                "account_id": (metrics or {}).get("account_id"),
+                "symbol": symbol,
+                "signal": signal,
+                "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+                "spread_points": _coerce_int((metrics or {}).get("spread_points"), None) if (metrics or {}).get("spread_points") is not None else None,
+                "max_spread_points": max_spread_points,
+                "margin_free": margin_free,
+                "equity": equity,
+                "balance": _coerce_float((metrics or {}).get("balance"), equity),
+                "margin_usage_pct": margin_usage_pct,
+                "atr_value": atr_value,
+                "trailing_mode": state.get("auto_trade_trailing_mode"),
+                "risk_mode": state.get("auto_trade_risk_mode"),
+                "lot_mode": state.get("auto_trade_risk_mode"),
+                "lot": lot_to_open,
+                "session_hour": current_hour,
             }
         )
         _diag_open_attempt(
