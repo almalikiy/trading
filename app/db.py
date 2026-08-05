@@ -922,7 +922,9 @@ def get_trade_history():
             SELECT type, entry, exit, profit, entryTime, exitTime, reason,
                                          tpValue, slValue, broker_id, broker_name, account_id, platform,
                      trade_id, status, symbol, lot, ticket,
-                   execution_mode, terminal_path
+                   execution_mode, terminal_path,
+                   trailing_mode, risk_mode, signal_score, spread_points,
+                   margin_usage_pct, equity, balance, atr_value, session_hour
             FROM trade_history
             ORDER BY entryTime ASC, id ASC
             """
@@ -949,6 +951,15 @@ def get_trade_history():
                 "ticket": row["ticket"],
                 "execution_mode": row["execution_mode"],
                 "terminal_path": row["terminal_path"],
+                "trailing_mode": row["trailing_mode"],
+                "risk_mode": row["risk_mode"],
+                "signal_score": row["signal_score"],
+                "spread_points": row["spread_points"],
+                "margin_usage_pct": row["margin_usage_pct"],
+                "equity": row["equity"],
+                "balance": row["balance"],
+                "atr_value": row["atr_value"],
+                "session_hour": row["session_hour"],
             }
             for row in rows
         ]
@@ -1081,7 +1092,16 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                     account_id = COALESCE(?, account_id),
                     platform = COALESCE(?, platform),
                     execution_mode = COALESCE(?, execution_mode),
-                    terminal_path = COALESCE(?, terminal_path)
+                    terminal_path = COALESCE(?, terminal_path),
+                    trailing_mode = COALESCE(?, trailing_mode),
+                    risk_mode = COALESCE(?, risk_mode),
+                    signal_score = CASE WHEN ? IS NULL THEN signal_score ELSE ? END,
+                    spread_points = CASE WHEN ? IS NULL THEN spread_points ELSE ? END,
+                    margin_usage_pct = CASE WHEN ? IS NULL THEN margin_usage_pct ELSE ? END,
+                    equity = CASE WHEN ? IS NULL THEN equity ELSE ? END,
+                    balance = CASE WHEN ? IS NULL THEN balance ELSE ? END,
+                    atr_value = CASE WHEN ? IS NULL THEN atr_value ELSE ? END,
+                    session_hour = CASE WHEN ? IS NULL THEN session_hour ELSE ? END
                 WHERE id = ?
                 """,
                 (
@@ -1110,6 +1130,22 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                     trade.get("platform"),
                     trade.get("execution_mode"),
                     trade.get("terminal_path"),
+                    trade.get("trailing_mode"),
+                    trade.get("risk_mode"),
+                    trade.get("signal_score"),
+                    trade.get("signal_score"),
+                    trade.get("spread_points"),
+                    trade.get("spread_points"),
+                    trade.get("margin_usage_pct"),
+                    trade.get("margin_usage_pct"),
+                    trade.get("equity"),
+                    trade.get("equity"),
+                    trade.get("balance"),
+                    trade.get("balance"),
+                    trade.get("atr_value"),
+                    trade.get("atr_value"),
+                    trade.get("session_hour"),
+                    trade.get("session_hour"),
                     row["id"],
                 ),
             )
@@ -1121,9 +1157,11 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                 trade_id, status, type, symbol, lot, ticket,
                 entry, exit, profit, entryTime, exitTime, reason,
                 tpValue, slValue, broker_id, broker_name, account_id,
-                platform, execution_mode, terminal_path
+                platform, execution_mode, terminal_path,
+                trailing_mode, risk_mode, signal_score, spread_points,
+                margin_usage_pct, equity, balance, atr_value, session_hour
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade_id,
@@ -1146,6 +1184,15 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                 trade.get("platform"),
                 trade.get("execution_mode"),
                 trade.get("terminal_path"),
+                trade.get("trailing_mode"),
+                trade.get("risk_mode"),
+                trade.get("signal_score"),
+                trade.get("spread_points"),
+                trade.get("margin_usage_pct"),
+                trade.get("equity"),
+                trade.get("balance"),
+                trade.get("atr_value"),
+                trade.get("session_hour"),
             ),
         )
         return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]

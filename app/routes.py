@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Request, Query, Body
-from .db import get_account_state, save_account_state, insert_trade, get_trade_history, get_broker, get_default_broker, get_open_trades_count, list_open_trades, close_trade_record, resolve_feed_broker, update_open_trade_tpsl, apply_auto_trade_profile_to_state, save_auto_trade_profile, has_auto_trade_profile, get_auto_trade_statistics, get_auto_trade_profile_history
+from fastapi.responses import FileResponse
+from .db import get_account_state, save_account_state, insert_trade, get_trade_history, get_broker, get_default_broker, get_open_trades_count, list_open_trades, close_trade_record, resolve_feed_broker, update_open_trade_tpsl, apply_auto_trade_profile_to_state, save_auto_trade_profile, has_auto_trade_profile, get_auto_trade_statistics, get_auto_trade_profile_history, get_auto_trade_events
 router = APIRouter()
 from .logic import log_mt5_error
 from datetime import datetime
@@ -18,6 +19,7 @@ from .terminal_adapters import (
     sync_all_terminal_trade_state,
 )
 from .terminal_adapters import ensure_terminal_running
+from .ml_risk import get_dataset as get_ml_dataset, train_risk_mode_model, export_dataset_csv, export_dataset_json
 
 # === Analytic TP/SL Logic ===
 
@@ -502,6 +504,92 @@ def get_auto_trade_stats_route(window_days: int = 30, broker_id: int | None = No
         "status": "ok",
         "stats": get_auto_trade_statistics(window_days=window_days, broker_id=broker_id, account_id=account_id),
     }
+
+
+@router.get("/account/auto_trade_events")
+def get_auto_trade_events_route(
+    limit: int = 200,
+    broker_id: int | None = None,
+    account_id: int | None = None,
+    event_type: str | None = None,
+    since: int | None = None,
+):
+    rows = get_auto_trade_events(
+        limit=max(1, min(int(limit or 200), 5000)),
+        broker_id=broker_id,
+        account_id=account_id,
+        event_type=event_type,
+        since=since,
+    )
+    return {
+        "status": "ok",
+        "rows": len(rows),
+        "events": rows,
+    }
+
+
+@router.get("/account/auto_trade_ml_dataset")
+def get_auto_trade_ml_dataset(limit: int = 2000):
+    rows = get_ml_dataset(limit=limit)
+    return {
+        "status": "ok",
+        "rows": len(rows),
+        "dataset": rows,
+    }
+
+
+@router.post("/account/auto_trade_ml_train")
+def train_auto_trade_ml(limit: int = 5000):
+    dataset = get_ml_dataset(limit=limit)
+    return {
+        "status": "ok",
+        "dataset_rows": len(dataset),
+        "result": train_risk_mode_model(dataset),
+    }
+
+
+@router.post("/account/auto_trade_ml_export")
+def export_auto_trade_ml_dataset(format: str = Body("json"), limit: int = Body(10000)):
+    safe_format = str(format or "json").strip().lower()
+    exports_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "exports")
+    os.makedirs(exports_dir, exist_ok=True)
+    ts = int(time.time())
+
+    if safe_format == "csv":
+        path = os.path.join(exports_dir, f"auto_trade_dataset_{ts}.csv")
+        payload = export_dataset_csv(path, limit=limit)
+    elif safe_format == "json":
+        path = os.path.join(exports_dir, f"auto_trade_dataset_{ts}.json")
+        payload = export_dataset_json(path, limit=limit)
+    else:
+        return {"status": "error", "message": "Format export harus csv atau json."}
+
+    filename = os.path.basename(str(payload.get("path") or ""))
+    return {
+        "status": "ok",
+        "export": {
+            **payload,
+            "filename": filename,
+            "download_url": f"/account/auto_trade_ml_export_download?file={filename}" if filename else None,
+        },
+    }
+
+
+@router.get("/account/auto_trade_ml_export_download")
+def download_auto_trade_ml_export(file: str = Query(..., min_length=1)):
+    exports_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(__file__)), "exports"))
+    safe_name = os.path.basename(str(file or "").strip())
+    if not safe_name:
+        return {"status": "error", "message": "Nama file export tidak valid."}
+
+    full_path = os.path.abspath(os.path.join(exports_dir, safe_name))
+    if not full_path.startswith(exports_dir + os.sep):
+        return {"status": "error", "message": "Path file tidak valid."}
+    if not os.path.exists(full_path):
+        return {"status": "error", "message": "File export tidak ditemukan."}
+
+    media_type = "text/csv" if safe_name.lower().endswith(".csv") else "application/json"
+    return FileResponse(path=full_path, media_type=media_type, filename=safe_name)
 
 # === Real Trade Execution Endpoints ===
 

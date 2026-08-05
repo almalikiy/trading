@@ -121,6 +121,23 @@ function formatTradeTime(epochSeconds) {
   return new Date(value * 1000).toLocaleString();
 }
 
+function getRecommendationSource(event) {
+  const reason = String(event?.reason || "").toLowerCase();
+  const decision = String(event?.decision || "").toLowerCase();
+  const modelType = String(event?.payload?.adaptive_meta?.model_type || "").toLowerCase();
+
+  if (reason.includes("adaptive_ml_prediction") || modelType === "random_forest" || modelType === "majority") {
+    return "ml_adaptive";
+  }
+  if (reason.startsWith("rule_") || reason.startsWith("condition_") || reason.startsWith("hybrid_")) {
+    return "rule_based";
+  }
+  if (reason.includes("adaptive_best_history") || reason.includes("adaptive_fallback_manual") || decision.startsWith("risk_mode_recommendation:")) {
+    return "adaptive_history";
+  }
+  return "unknown";
+}
+
 export default function App( { darkMode, setDarkMode }) {
   const [engine, setEngine] = useState("mt5");
   const [tradeMode, setTradeMode] = useState("scalp");
@@ -172,6 +189,11 @@ export default function App( { darkMode, setDarkMode }) {
   const [tpSlDrafts, setTpSlDrafts] = useState({});
   const [tradeActionLoading, setTradeActionLoading] = useState({});
   const [autoTradeHealth, setAutoTradeHealth] = useState(null);
+  const [autoTradeEvents, setAutoTradeEvents] = useState([]);
+  const [eventsLoading, setEventsLoading] = useState(true);
+  const [eventFilterBrokerId, setEventFilterBrokerId] = useState("");
+  const [eventFilterAccountId, setEventFilterAccountId] = useState("");
+  const [eventFilterSinceMinutes, setEventFilterSinceMinutes] = useState(180);
 
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMsg, setSnackbarMsg] = useState("");
@@ -329,6 +351,39 @@ export default function App( { darkMode, setDarkMode }) {
       .then((data) => setAutoTradeHealth(data))
       .catch(() => setAutoTradeHealth(null));
   };
+
+  const refreshAutoTradeEvents = () => {
+    const params = new URLSearchParams();
+    params.set("limit", "60");
+    params.set("event_type", "analysis");
+    if (eventFilterBrokerId) params.set("broker_id", String(eventFilterBrokerId));
+    if (eventFilterAccountId) params.set("account_id", String(eventFilterAccountId));
+    const sinceMinutes = Math.max(1, Number(eventFilterSinceMinutes || 180));
+    const sinceEpoch = Math.floor(Date.now() / 1000) - (sinceMinutes * 60);
+    params.set("since", String(sinceEpoch));
+
+    fetch(`${getBackendUrl("mt5", "http")}/account/auto_trade_events?${params.toString()}`)
+      .then((res) => res.json())
+      .then((data) => {
+        const rows = Array.isArray(data?.events) ? data.events : [];
+        setAutoTradeEvents(
+          rows.filter((row) => String(row?.decision || "").toLowerCase().startsWith("risk_mode_recommendation:"))
+        );
+      })
+      .catch(() => setAutoTradeEvents([]))
+      .finally(() => setEventsLoading(false));
+  };
+
+  useEffect(() => {
+    refreshAutoTradeEvents();
+  }, [eventFilterBrokerId, eventFilterAccountId, eventFilterSinceMinutes]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      refreshAutoTradeEvents();
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [eventFilterBrokerId, eventFilterAccountId, eventFilterSinceMinutes]);
 
   useEffect(() => {
     let inFlight = false;
@@ -955,6 +1010,115 @@ export default function App( { darkMode, setDarkMode }) {
               </Box>
             </Box>
           </Box>
+        </Paper>
+
+        <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 2, overflowX: "auto", width: "100%" }}>
+          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 1 }}>
+            <Typography variant="h6">Adaptive Risk Recommendations</Typography>
+            <Button size="small" variant="outlined" onClick={refreshAutoTradeEvents}>
+              Refresh
+            </Button>
+          </Box>
+          <Grid container spacing={1} sx={{ mb: 1 }}>
+            <Grid item xs={12} md={3}>
+              <FormControl size="small" fullWidth>
+                <InputLabel id="event-broker-filter-label">Broker Filter</InputLabel>
+                <Select
+                  labelId="event-broker-filter-label"
+                  label="Broker Filter"
+                  value={eventFilterBrokerId}
+                  onChange={(e) => setEventFilterBrokerId(e.target.value)}
+                >
+                  <MenuItem value="">All Brokers</MenuItem>
+                  {brokers.map((b) => (
+                    <MenuItem key={b.id} value={String(b.id)}>{b.name}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Account Filter"
+                value={eventFilterAccountId}
+                onChange={(e) => setEventFilterAccountId(e.target.value.replace(/[^0-9]/g, ""))}
+                placeholder="contoh: 123456"
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Since (minutes)"
+                type="number"
+                value={eventFilterSinceMinutes}
+                onChange={(e) => setEventFilterSinceMinutes(Math.max(1, Number(e.target.value || 180)))}
+                inputProps={{ min: 1, max: 10080, step: 1 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Button
+                fullWidth
+                size="small"
+                variant="outlined"
+                onClick={() => {
+                  setEventFilterBrokerId("");
+                  setEventFilterAccountId("");
+                  setEventFilterSinceMinutes(180);
+                }}
+              >
+                Reset Filters
+              </Button>
+            </Grid>
+          </Grid>
+          {eventsLoading ? (
+            <Box sx={{ py: 2, display: "flex", justifyContent: "center" }}>
+              <CircularProgress size={20} />
+            </Box>
+          ) : autoTradeEvents.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">Belum ada event rekomendasi risk mode.</Typography>
+          ) : (
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Time</TableCell>
+                    <TableCell>Symbol</TableCell>
+                    <TableCell>Decision</TableCell>
+                    <TableCell>Source</TableCell>
+                    <TableCell>Reason</TableCell>
+                    <TableCell>Risk Mode</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {autoTradeEvents.map((event, index) => {
+                    const source = getRecommendationSource(event);
+                    return (
+                      <TableRow key={`${event.timestamp || 0}-${event.trade_id || "no-trade"}-${index}`}>
+                        <TableCell>{formatTradeTime(event.timestamp)}</TableCell>
+                        <TableCell>{event.symbol || "-"}</TableCell>
+                        <TableCell>{event.decision || "-"}</TableCell>
+                        <TableCell>
+                          {source === "ml_adaptive" ? (
+                            <Chip size="small" color="success" label="ML Adaptive" />
+                          ) : source === "rule_based" ? (
+                            <Chip size="small" color="warning" label="Rule-based" />
+                          ) : source === "adaptive_history" ? (
+                            <Chip size="small" color="info" label="Adaptive History" />
+                          ) : (
+                            <Chip size="small" label="Unknown" />
+                          )}
+                        </TableCell>
+                        <TableCell>{event.reason || "-"}</TableCell>
+                        <TableCell>{event.risk_mode || "-"}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
         </Paper>
 
         <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 2, overflowX: "auto", width: "100%" }}>

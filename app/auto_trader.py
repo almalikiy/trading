@@ -23,6 +23,7 @@ from .db import (
     get_risk_mode_performance,
 )
 from .logic import analyze_symbol, fetch_ohlcv
+from .ml_risk import log_trade, predict_risk_mode
 from .terminal_adapters import (
     ensure_terminal_running,
     get_broker_adapter,
@@ -707,6 +708,23 @@ def _select_effective_risk_mode(state, metrics, signal_score, atr_value, open_ro
             if strongest_rr >= hybrid_addon_rr_threshold:
                 selected, reason = hybrid_addon_mode, "hybrid_addon_mode"
     elif strategy == "adaptive":
+        ml_result = predict_risk_mode(
+            {
+                "atr": atr,
+                "spread_points": spread_points,
+                "signal_score": conf,
+                "margin_usage_pct": _coerce_float((metrics or {}).get("margin_usage_pct"), 0.0),
+                "balance": balance,
+                "equity": _coerce_float((metrics or {}).get("equity"), balance),
+                "session_time": datetime.now().hour,
+            }
+        )
+        ml_mode = _normalize_risk_mode((ml_result or {}).get("risk_mode"))
+        if ml_mode in ("fixed_lot", "risk_percent", "balance_scaled", "atr_dynamic"):
+            selected = ml_mode
+            reason = "adaptive_ml_prediction"
+            return selected, reason, strategy, ml_result
+
         perf_rows = get_risk_mode_performance(
             window_days=max(7, _coerce_int(state.get("auto_trade_risk_adaptive_window_days"), 90)),
             broker_id=broker_id,
@@ -728,7 +746,7 @@ def _select_effective_risk_mode(state, metrics, signal_score, atr_value, open_ro
         else:
             reason = "adaptive_fallback_manual"
 
-    return selected, reason, strategy
+    return selected, reason, strategy, None
 
 
 def _passes_margin_guards(state, metrics, lot_to_open):
@@ -965,7 +983,7 @@ def _run_auto_trade_cycle():
             sl_for_risk = round(1 * manual_lot, 2)
         if bool(state.get("auto_trade_use_atr_tpsl", True)) and atr_value and atr_value > 0:
             sl_for_risk = atr_value * max(0.2, min(10.0, _coerce_float(state.get("auto_trade_atr_sl_mult"), 1.5)))
-        effective_risk_mode, risk_mode_reason, risk_selector_strategy = _select_effective_risk_mode(
+        effective_risk_mode, risk_mode_reason, risk_selector_strategy, adaptive_meta = _select_effective_risk_mode(
             state,
             metrics,
             _coerce_float(signal_scoring.get("score"), 0.0),
@@ -981,7 +999,7 @@ def _run_auto_trade_cycle():
             {
                 "timestamp": int(time.time()),
                 "event_type": "analysis",
-                "decision": "open_candidate",
+                "decision": f"risk_mode_recommendation:{effective_risk_mode}",
                 "reason": risk_mode_reason,
                 "broker_id": broker.get("id"),
                 "broker_name": broker.get("name"),
@@ -1004,6 +1022,7 @@ def _run_auto_trade_cycle():
                 "payload": {
                     "risk_selector_strategy": risk_selector_strategy,
                     "manual_mode": state.get("auto_trade_risk_mode"),
+                    "adaptive_meta": adaptive_meta,
                 },
             }
         )
@@ -1111,34 +1130,47 @@ def _run_auto_trade_cycle():
 
         tp_value, sl_value = _resolve_initial_tpsl(state, lot_to_open, atr_value)
 
-        create_trade_open_record(
-            {
-                "trade_id": trade_id,
-                "type": signal.upper(),
-                "symbol": symbol,
-                "lot": lot_to_open,
-                "ticket": order.get("ticket"),
-                "entry": order.get("price"),
-                "entryTime": now,
-                "reason": f"auto_open:{signal_scoring.get('score', 0.0):.3f}",
-                "tpValue": tp_value,
-                "slValue": sl_value,
-                "broker_id": broker.get("id"),
-                "broker_name": broker.get("name"),
-                "account_id": (metrics or {}).get("account_id"),
-                "platform": broker.get("platform"),
-                "execution_mode": method,
-                "terminal_path": broker.get("terminal_path"),
-                "trailing_mode": state.get("auto_trade_trailing_mode"),
-                "risk_mode": effective_risk_mode,
-                "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+        open_trade_payload = {
+            "trade_id": trade_id,
+            "status": "open",
+            "type": signal.upper(),
+            "symbol": symbol,
+            "lot": lot_to_open,
+            "ticket": order.get("ticket"),
+            "entry": order.get("price"),
+            "entryTime": now,
+            "reason": f"auto_open:{signal_scoring.get('score', 0.0):.3f}",
+            "tpValue": tp_value,
+            "slValue": sl_value,
+            "broker_id": broker.get("id"),
+            "broker_name": broker.get("name"),
+            "account_id": (metrics or {}).get("account_id"),
+            "platform": broker.get("platform"),
+            "execution_mode": method,
+            "terminal_path": broker.get("terminal_path"),
+            "trailing_mode": state.get("auto_trade_trailing_mode"),
+            "risk_mode": effective_risk_mode,
+            "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+            "spread_points": spread_points if spread_points >= 0 else None,
+            "margin_usage_pct": margin_usage_pct,
+            "equity": equity,
+            "balance": _coerce_float((metrics or {}).get("balance"), equity),
+            "atr_value": atr_value,
+            "session_hour": current_hour,
+        }
+        create_trade_open_record(open_trade_payload)
+        log_trade(
+            open_trade_payload,
+            features={
+                "atr": atr_value,
                 "spread_points": spread_points if spread_points >= 0 else None,
+                "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
                 "margin_usage_pct": margin_usage_pct,
-                "equity": equity,
                 "balance": _coerce_float((metrics or {}).get("balance"), equity),
-                "atr_value": atr_value,
-                "session_hour": current_hour,
-            }
+                "equity": equity,
+                "session_time": current_hour,
+            },
+            result={"status": "open", "risk_mode": effective_risk_mode},
         )
         log_auto_trade_event(
             {
@@ -1167,6 +1199,7 @@ def _run_auto_trade_cycle():
                     "risk_selector_strategy": risk_selector_strategy,
                     "risk_mode_reason": risk_mode_reason,
                     "manual_mode": state.get("auto_trade_risk_mode"),
+                    "adaptive_meta": adaptive_meta,
                 },
             }
         )

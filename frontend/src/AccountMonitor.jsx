@@ -117,6 +117,13 @@ export default function AccountMonitor() {
   const [runtimeLoaded, setRuntimeLoaded] = useState(false);
   const [addingBroker, setAddingBroker] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, severity: "info", message: "" });
+  const [mlDataset, setMlDataset] = useState([]);
+  const [mlDatasetLimit, setMlDatasetLimit] = useState(50);
+  const [mlExportFormat, setMlExportFormat] = useState("json");
+  const [mlExportLimit, setMlExportLimit] = useState(10000);
+  const [mlBusy, setMlBusy] = useState({ dataset: false, train: false, export: false });
+  const [mlLastTrain, setMlLastTrain] = useState(null);
+  const [mlLastExport, setMlLastExport] = useState(null);
   const [brokerForm, setBrokerForm] = useState({
     name: "",
     platform: "mt5",
@@ -590,6 +597,75 @@ export default function AccountMonitor() {
       setSnackbar({ open: true, severity: "error", message: err.message || "Tidak bisa menjalankan sinkronisasi history." });
     } finally {
       setTradeHistorySyncRunning(false);
+    }
+  };
+
+  const loadMlDataset = async () => {
+    setMlBusy((prev) => ({ ...prev, dataset: true }));
+    try {
+      const safeLimit = Math.max(10, Math.min(5000, Number(mlDatasetLimit || 50)));
+      const res = await fetch(`${API_BASE}/account/auto_trade_ml_dataset?limit=${safeLimit}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.status === "error") {
+        throw new Error(data.message || data.detail || "Gagal mengambil dataset ML.");
+      }
+      const rows = Array.isArray(data.dataset) ? data.dataset : [];
+      setMlDataset(rows);
+      setSnackbar({ open: true, severity: "success", message: `Dataset ML berhasil dimuat (${rows.length} row).` });
+    } catch (err) {
+      setSnackbar({ open: true, severity: "error", message: err.message || "Tidak bisa mengambil dataset ML." });
+    } finally {
+      setMlBusy((prev) => ({ ...prev, dataset: false }));
+    }
+  };
+
+  const runMlTrain = async () => {
+    setMlBusy((prev) => ({ ...prev, train: true }));
+    try {
+      const safeLimit = Math.max(100, Math.min(50000, Number(mlExportLimit || 5000)));
+      const res = await fetch(`${API_BASE}/account/auto_trade_ml_train?limit=${safeLimit}`, {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.status === "error") {
+        throw new Error(data.message || data.detail || "Retrain model gagal.");
+      }
+      const trained = !!(data.result && data.result.trained);
+      setMlLastTrain(data.result || null);
+      if (!trained) {
+        throw new Error(data.result?.reason || "Retrain belum dijalankan (data tidak cukup)." );
+      }
+      setSnackbar({ open: true, severity: "success", message: `Retrain berhasil (${data.result.model_type || "model"}, rows=${data.result.rows || 0}).` });
+    } catch (err) {
+      setSnackbar({ open: true, severity: "error", message: err.message || "Retrain model gagal." });
+    } finally {
+      setMlBusy((prev) => ({ ...prev, train: false }));
+    }
+  };
+
+  const runMlExport = async () => {
+    setMlBusy((prev) => ({ ...prev, export: true }));
+    try {
+      const safeLimit = Math.max(100, Math.min(200000, Number(mlExportLimit || 10000)));
+      const res = await fetch(`${API_BASE}/account/auto_trade_ml_export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ format: mlExportFormat, limit: safeLimit }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.status === "error") {
+        throw new Error(data.message || data.detail || "Export dataset ML gagal.");
+      }
+      setMlLastExport(data.export || null);
+      setSnackbar({
+        open: true,
+        severity: "success",
+        message: `Export ${data.export?.format || mlExportFormat} berhasil (${data.export?.rows || 0} row).`,
+      });
+    } catch (err) {
+      setSnackbar({ open: true, severity: "error", message: err.message || "Export dataset ML gagal." });
+    } finally {
+      setMlBusy((prev) => ({ ...prev, export: false }));
     }
   };
 
@@ -1438,6 +1514,142 @@ const setDefaultBroker = async (id) => {
                   {tradeHistorySyncRunning ? "Syncing..." : "Sync Now"}
                 </Button>
               </Box>
+            </Grid>
+          </Grid>
+
+          <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>Adaptive ML Toolkit</Typography>
+          <Grid container spacing={1} alignItems="center">
+            <Grid item xs={12} md={2}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Dataset Limit"
+                type="number"
+                value={mlDatasetLimit}
+                onChange={(e) => setMlDatasetLimit(Number(e.target.value))}
+                inputProps={{ min: 10, max: 5000, step: 10 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={2}>
+              <TextField
+                fullWidth
+                select
+                size="small"
+                label="Export Format"
+                value={mlExportFormat}
+                onChange={(e) => setMlExportFormat(e.target.value)}
+              >
+                <MenuItem value="json">JSON</MenuItem>
+                <MenuItem value="csv">CSV</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid item xs={12} md={2}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Train/Export Limit"
+                type="number"
+                value={mlExportLimit}
+                onChange={(e) => setMlExportLimit(Number(e.target.value))}
+                inputProps={{ min: 100, max: 200000, step: 100 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                <Button
+                  variant="outlined"
+                  onClick={loadMlDataset}
+                  disabled={mlBusy.dataset}
+                  data-testid="ml-dataset-btn"
+                >
+                  {mlBusy.dataset ? "Loading..." : "Preview Dataset"}
+                </Button>
+                <Button
+                  variant="contained"
+                  color="success"
+                  onClick={runMlTrain}
+                  disabled={mlBusy.train}
+                  data-testid="ml-train-btn"
+                >
+                  {mlBusy.train ? "Training..." : "Train Model"}
+                </Button>
+                <Button
+                  variant="outlined"
+                  color="secondary"
+                  onClick={runMlExport}
+                  disabled={mlBusy.export}
+                  data-testid="ml-export-btn"
+                >
+                  {mlBusy.export ? "Exporting..." : "Export Dataset"}
+                </Button>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  component="a"
+                  href={mlLastExport?.download_url ? `${API_BASE}${mlLastExport.download_url}` : undefined}
+                  download={mlLastExport?.filename || undefined}
+                  disabled={!mlLastExport?.download_url}
+                  data-testid="ml-download-btn"
+                >
+                  Download Export
+                </Button>
+              </Box>
+            </Grid>
+            <Grid item xs={12}>
+              {mlLastTrain?.trained ? (
+                <Alert severity="success" sx={{ mt: 0.5 }}>
+                  Model terbaru: {mlLastTrain.model_type || "unknown"} | rows: {mlLastTrain.rows || 0} | trained trade count: {mlLastTrain.trained_trade_count || 0}
+                </Alert>
+              ) : (
+                <Alert severity="info" sx={{ mt: 0.5 }}>
+                  Gunakan Preview Dataset untuk melihat data training, lalu jalankan Train Model untuk retrain manual.
+                </Alert>
+              )}
+            </Grid>
+            <Grid item xs={12}>
+              <Typography variant="caption" color="text.secondary">
+                {mlLastExport?.filename
+                  ? `File export terakhir: ${mlLastExport.filename}`
+                  : "Belum ada file export yang siap di-download."}
+              </Typography>
+            </Grid>
+            <Grid item xs={12}>
+              <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 260 }}>
+                <Table size="small" stickyHeader>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Trade ID</TableCell>
+                      <TableCell>Risk Mode</TableCell>
+                      <TableCell>Symbol</TableCell>
+                      <TableCell>Signal</TableCell>
+                      <TableCell>ATR</TableCell>
+                      <TableCell>Spread</TableCell>
+                      <TableCell>Profit</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody data-testid="ml-dataset-table-body">
+                    {mlDataset.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={7}>
+                          <Typography variant="caption" color="text.secondary">Belum ada preview dataset.</Typography>
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      mlDataset.map((row, idx) => (
+                        <TableRow key={`${row.trade_id || "row"}-${idx}`}>
+                          <TableCell>{row.trade_id || "-"}</TableCell>
+                          <TableCell>{row.risk_mode || "-"}</TableCell>
+                          <TableCell>{row.symbol || "-"}</TableCell>
+                          <TableCell>{row.features?.signal_score ?? "-"}</TableCell>
+                          <TableCell>{row.features?.atr ?? "-"}</TableCell>
+                          <TableCell>{row.features?.spread_points ?? "-"}</TableCell>
+                          <TableCell>{row.result?.profit ?? "-"}</TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
             </Grid>
           </Grid>
         </Box>

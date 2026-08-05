@@ -5,3 +5,4 @@ numpy
 MetaTrader5
 TA-Lib
 python-dotenv
+scikit-learn
