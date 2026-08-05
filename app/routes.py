@@ -247,7 +247,7 @@ def mt5_error_log_clear():
 
 
 from .logic import analyze_symbol, get_signal_snapshot, get_ohlcv_snapshot
-from .auto_trader import is_auto_trader_thread_started
+from .auto_trader import is_auto_trader_thread_started, get_auto_trader_runtime_status
 
 _SYNC_LOCK = threading.Lock()
 _LAST_TERMINAL_SYNC_TS = 0.0
@@ -388,6 +388,22 @@ def get_auto_trade_health():
         if not metrics.get("can_trade"):
             blockers.append(f"Metrik akun belum siap: {metrics.get('reason')}")
 
+        max_spread_points = int(state.get("auto_trade_max_spread_points", 120) or 120)
+        spread_points = metrics.get("spread_points")
+        spread_ok = True
+        if isinstance(spread_points, int) and max_spread_points > 0:
+            spread_ok = spread_points <= max_spread_points
+        checks.append(
+            {
+                "key": "spread_guard",
+                "ok": spread_ok,
+                "value": f"{spread_points}/{max_spread_points}",
+                "message": "Spread saat ini vs max spread points",
+            }
+        )
+        if not spread_ok:
+            blockers.append(f"Spread terlalu tinggi: {spread_points} > {max_spread_points}.")
+
     start_hour = int(state.get("auto_trade_session_start_hour", 0) or 0)
     end_hour = int(state.get("auto_trade_session_end_hour", 24) or 24)
     hour_now = datetime.now().hour
@@ -422,6 +438,14 @@ def get_auto_trade_health():
         "checks": checks,
         "symbol": symbol,
         "feed_broker": feed_broker,
+    }
+
+
+@router.get("/account/auto_trade_runtime")
+def get_auto_trade_runtime():
+    return {
+        "status": "ok",
+        "runtime": get_auto_trader_runtime_status(),
     }
 
 # === Real Trade Execution Endpoints ===

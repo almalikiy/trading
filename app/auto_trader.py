@@ -1,6 +1,7 @@
 import threading
 import time
 import uuid
+from collections import deque
 from datetime import datetime
 
 from .db import (
@@ -31,6 +32,122 @@ from .terminal_adapters import (
 
 _loop_started = False
 _TRADE_RUNTIME = {}
+_DIAG_LOCK = threading.Lock()
+_OPEN_FAIL_LOG_LOCK = threading.Lock()
+_OPEN_FAIL_LOG_TS = {}
+_AUTO_TRADE_DIAG = {
+    "started_at": int(time.time()),
+    "last_cycle_at": None,
+    "last_decision": "init",
+    "last_reason": "not_started",
+    "last_signal": "wait",
+    "last_signal_score": 0.0,
+    "last_symbol": None,
+    "last_open_attempt_at": None,
+    "last_open_attempt": None,
+    "last_open_success_at": None,
+    "last_open_error": None,
+    "last_close_attempt_at": None,
+    "last_close_attempt": None,
+    "skip_counts": {},
+    "recent_events": deque(maxlen=40),
+}
+
+
+def _log_open_failure_throttled(reason, **extra):
+    symbol = str(extra.get("symbol") or "-")
+    broker = str(extra.get("broker_name") or "-")
+    key = f"{reason}:{symbol}:{broker}"
+    now = time.time()
+    with _OPEN_FAIL_LOG_LOCK:
+        last_ts = _OPEN_FAIL_LOG_TS.get(key, 0.0)
+        if now - last_ts < 30.0:
+            return
+        _OPEN_FAIL_LOG_TS[key] = now
+
+    details = []
+    for field in ("signal", "spread_points", "max_spread_points", "lot", "method", "broker_reason", "error"):
+        if extra.get(field) is not None:
+            details.append(f"{field}={extra.get(field)}")
+    msg = f"auto_open blocked [{reason}] symbol={symbol} broker={broker}"
+    if details:
+        msg += " " + " ".join(details)
+    log_mt5_error(msg, broker_name=(None if broker == "-" else broker))
+
+
+def _diag_event(decision, reason, **extra):
+    now = int(time.time())
+    with _DIAG_LOCK:
+        _AUTO_TRADE_DIAG["last_cycle_at"] = now
+        _AUTO_TRADE_DIAG["last_decision"] = decision
+        _AUTO_TRADE_DIAG["last_reason"] = reason
+        if "symbol" in extra and extra.get("symbol"):
+            _AUTO_TRADE_DIAG["last_symbol"] = str(extra.get("symbol"))
+        if "signal" in extra and extra.get("signal") is not None:
+            _AUTO_TRADE_DIAG["last_signal"] = str(extra.get("signal"))
+        if "signal_score" in extra and extra.get("signal_score") is not None:
+            _AUTO_TRADE_DIAG["last_signal_score"] = float(extra.get("signal_score"))
+        if decision == "skip":
+            counts = _AUTO_TRADE_DIAG["skip_counts"]
+            counts[reason] = int(counts.get(reason, 0)) + 1
+        _AUTO_TRADE_DIAG["recent_events"].append(
+            {
+                "ts": now,
+                "decision": decision,
+                "reason": reason,
+                "extra": extra,
+            }
+        )
+
+
+def _diag_open_attempt(status, **extra):
+    now = int(time.time())
+    with _DIAG_LOCK:
+        _AUTO_TRADE_DIAG["last_open_attempt_at"] = now
+        _AUTO_TRADE_DIAG["last_open_attempt"] = {
+            "status": status,
+            **extra,
+        }
+        if status == "ok":
+            _AUTO_TRADE_DIAG["last_open_success_at"] = now
+            _AUTO_TRADE_DIAG["last_open_error"] = None
+        elif status == "error":
+            _AUTO_TRADE_DIAG["last_open_error"] = str(extra.get("error") or "unknown")
+            details = dict(extra)
+            reason = str(details.pop("reason", "unknown"))
+            _log_open_failure_throttled(reason, **details)
+
+
+def _diag_close_attempt(status, **extra):
+    now = int(time.time())
+    with _DIAG_LOCK:
+        _AUTO_TRADE_DIAG["last_close_attempt_at"] = now
+        _AUTO_TRADE_DIAG["last_close_attempt"] = {
+            "status": status,
+            **extra,
+        }
+
+
+def get_auto_trader_runtime_status():
+    with _DIAG_LOCK:
+        return {
+            "loop_started": bool(_loop_started),
+            "started_at": _AUTO_TRADE_DIAG.get("started_at"),
+            "last_cycle_at": _AUTO_TRADE_DIAG.get("last_cycle_at"),
+            "last_decision": _AUTO_TRADE_DIAG.get("last_decision"),
+            "last_reason": _AUTO_TRADE_DIAG.get("last_reason"),
+            "last_signal": _AUTO_TRADE_DIAG.get("last_signal"),
+            "last_signal_score": _AUTO_TRADE_DIAG.get("last_signal_score"),
+            "last_symbol": _AUTO_TRADE_DIAG.get("last_symbol"),
+            "last_open_attempt_at": _AUTO_TRADE_DIAG.get("last_open_attempt_at"),
+            "last_open_attempt": _AUTO_TRADE_DIAG.get("last_open_attempt"),
+            "last_open_success_at": _AUTO_TRADE_DIAG.get("last_open_success_at"),
+            "last_open_error": _AUTO_TRADE_DIAG.get("last_open_error"),
+            "last_close_attempt_at": _AUTO_TRADE_DIAG.get("last_close_attempt_at"),
+            "last_close_attempt": _AUTO_TRADE_DIAG.get("last_close_attempt"),
+            "skip_counts": dict(_AUTO_TRADE_DIAG.get("skip_counts") or {}),
+            "recent_events": list(_AUTO_TRADE_DIAG.get("recent_events") or []),
+        }
 
 
 def _get_feed_broker(state):
@@ -536,6 +653,7 @@ def _passes_margin_guards(state, metrics, lot_to_open):
 
 
 def _run_auto_trade_cycle():
+    _diag_event("cycle", "start")
     state = get_account_state()
     feed_broker = _get_feed_broker(state)
     symbol = "XAUUSD"
@@ -560,19 +678,23 @@ def _run_auto_trade_cycle():
                 ensure_terminal_running(t.get("terminal_path"))
 
     if not state.get("auto_trade_enabled", False):
+        _diag_event("skip", "auto_trade_disabled", symbol=symbol)
         return
     if not state.get("enable_real_trade", False):
+        _diag_event("skip", "real_trade_disabled", symbol=symbol)
         return
 
     if not _within_trade_session(
         state.get("auto_trade_session_start_hour", 0),
         state.get("auto_trade_session_end_hour", 24),
     ):
+        _diag_event("skip", "outside_session", symbol=symbol)
         return
 
     cooldown_sec = max(0, min(3600, _coerce_int(state.get("auto_trade_cooldown_sec"), 30)))
     last_action_at = _last_auto_action_at()
     if cooldown_sec > 0 and last_action_at > 0 and int(time.time()) - last_action_at < cooldown_sec:
+        _diag_event("skip", "cooldown_active", symbol=symbol)
         return
 
     terminal_path = feed_broker.get("terminal_path") if feed_broker else None
@@ -581,17 +703,32 @@ def _run_auto_trade_cycle():
     raw_signal = str(signal_payload.get("signal") or "wait").lower()
     signal_scoring = _signal_strength(signal_payload, state)
     signal = raw_signal if raw_signal in ("buy", "sell") else signal_scoring.get("direction", "wait")
+    _diag_event(
+        "analysis",
+        "signal_ready",
+        symbol=symbol,
+        signal=signal,
+        signal_score=_coerce_float(signal_scoring.get("score"), 0.0),
+    )
 
     min_signal_score = max(
         max(0.0, min(0.95, _coerce_float(state.get("auto_trade_min_signal_score"), 0.55))),
         max(0.0, min(0.95, _coerce_float(state.get("auto_trade_confidence_threshold"), 0.6))),
     )
     if signal in ("buy", "sell") and _coerce_float(signal_scoring.get("score"), 0.0) < min_signal_score:
+        _diag_event(
+            "skip",
+            "signal_score_below_threshold",
+            symbol=symbol,
+            signal=signal,
+            signal_score=_coerce_float(signal_scoring.get("score"), 0.0),
+        )
         signal = "wait"
 
     atr_value = _resolve_atr_value(signal_payload)
 
     if signal == "sell" and not bool(state.get("auto_trade_allow_sell", True)):
+        _diag_event("skip", "sell_disabled", symbol=symbol, signal=signal)
         signal = "wait"
 
     open_rows = list_open_trades()
@@ -601,9 +738,26 @@ def _run_auto_trade_cycle():
     if len(open_rows) < max_open_trades and signal in ("buy", "sell"):
         broker = auto_open_broker
         if not broker:
+            _diag_open_attempt("error", reason="no_broker", symbol=symbol, signal=signal)
+            _diag_event("skip", "no_broker_for_open", symbol=symbol, signal=signal)
             return
         broker_status = probe_broker_order_status(broker, symbol=symbol, auto_start=True)
         if not broker_status.get("can_open_order"):
+            _diag_open_attempt(
+                "error",
+                reason="broker_not_ready",
+                broker_name=broker.get("name"),
+                broker_reason=broker_status.get("reason"),
+                symbol=symbol,
+                signal=signal,
+            )
+            _diag_event(
+                "skip",
+                "broker_not_ready",
+                symbol=symbol,
+                signal=signal,
+                signal_score=_coerce_float(signal_scoring.get("score"), 0.0),
+            )
             return
 
         constraints = get_broker_symbol_constraints(broker, symbol=symbol, auto_start=False)
@@ -612,6 +766,16 @@ def _run_auto_trade_cycle():
         max_spread_points = max(0, _coerce_int(state.get("auto_trade_max_spread_points"), 120))
         spread_points = _coerce_int((metrics or {}).get("spread_points"), -1)
         if spread_points >= 0 and max_spread_points > 0 and spread_points > max_spread_points:
+            _diag_open_attempt(
+                "error",
+                reason="spread_too_high",
+                spread_points=spread_points,
+                max_spread_points=max_spread_points,
+                broker_name=broker.get("name"),
+                symbol=symbol,
+                signal=signal,
+            )
+            _diag_event("skip", "spread_too_high", symbol=symbol, signal=signal)
             return
 
         manual_lot = _coerce_float(state.get("lot"), 0.01)
@@ -626,9 +790,13 @@ def _run_auto_trade_cycle():
             lot_to_open = normalize_lot_with_constraints(lot_to_open, constraints)
 
         if lot_to_open <= 0:
+            _diag_open_attempt("error", reason="lot_to_open_zero", broker_name=broker.get("name"), symbol=symbol, signal=signal)
+            _diag_event("skip", "lot_to_open_zero", symbol=symbol, signal=signal)
             return
 
         if not _passes_margin_guards(state, metrics, lot_to_open):
+            _diag_open_attempt("error", reason="margin_guard_blocked", broker_name=broker.get("name"), symbol=symbol, signal=signal)
+            _diag_event("skip", "margin_guard_blocked", symbol=symbol, signal=signal)
             return
 
         if abs(lot_to_open - manual_lot) > 1e-9:
@@ -636,7 +804,30 @@ def _run_auto_trade_cycle():
             save_account_state(state)
 
         adapter, method = get_broker_adapter(broker, broker.get("execution_mode"))
-        result = adapter.open_trade(symbol, lot_to_open, signal)
+        _diag_open_attempt(
+            "attempt",
+            broker_name=broker.get("name"),
+            symbol=symbol,
+            signal=signal,
+            lot=lot_to_open,
+            method=method,
+            score=_coerce_float(signal_scoring.get("score"), 0.0),
+        )
+        try:
+            result = adapter.open_trade(symbol, lot_to_open, signal)
+        except Exception as exc:
+            _diag_open_attempt(
+                "error",
+                reason="open_trade_exception",
+                broker_name=broker.get("name"),
+                symbol=symbol,
+                signal=signal,
+                lot=lot_to_open,
+                method=method,
+                error=str(exc),
+            )
+            _diag_event("skip", "open_trade_exception", symbol=symbol, signal=signal)
+            raise
         order = result.get("order", {})
         now = int(time.time())
         trade_id = str(uuid.uuid4())
@@ -663,7 +854,29 @@ def _run_auto_trade_cycle():
                 "terminal_path": broker.get("terminal_path"),
             }
         )
+        _diag_open_attempt(
+            "ok",
+            broker_name=broker.get("name"),
+            symbol=symbol,
+            signal=signal,
+            lot=lot_to_open,
+            ticket=order.get("ticket"),
+            method=method,
+            score=_coerce_float(signal_scoring.get("score"), 0.0),
+        )
+        _diag_event("action", "open_trade_created", symbol=symbol, signal=signal)
         return
+
+    if len(open_rows) >= max_open_trades and signal in ("buy", "sell"):
+        _diag_event("skip", "max_open_trades_reached", symbol=symbol, signal=signal)
+    elif signal == "wait":
+        _diag_event(
+            "skip",
+            "no_actionable_signal",
+            symbol=symbol,
+            signal=signal,
+            signal_score=_coerce_float(signal_scoring.get("score"), 0.0),
+        )
 
     for t in open_rows:
         broker = get_broker(t.get("broker_id")) if t.get("broker_id") else get_default_broker()
@@ -740,6 +953,13 @@ def _run_auto_trade_cycle():
             continue
 
         try:
+            _diag_close_attempt(
+                "attempt",
+                trade_id=t.get("trade_id"),
+                symbol=t.get("symbol") or symbol,
+                ticket=ticket,
+                direction=direction,
+            )
             result = adapter.close_trade(t.get("symbol") or symbol, float(t.get("lot") or 0.01), ticket)
             order = result.get("order", {})
             close_trade_record(
@@ -750,7 +970,21 @@ def _run_auto_trade_cycle():
                 ticket=ticket,
                 reason="auto_close",
             )
+            _diag_close_attempt(
+                "ok",
+                trade_id=t.get("trade_id"),
+                symbol=t.get("symbol") or symbol,
+                ticket=ticket,
+            )
+            _diag_event("action", "auto_close_done", symbol=t.get("symbol") or symbol)
         except Exception as exc:
+            _diag_close_attempt(
+                "error",
+                trade_id=t.get("trade_id"),
+                symbol=t.get("symbol") or symbol,
+                ticket=ticket,
+                error=str(exc),
+            )
             log_mt5_error(
                 f"Auto close failed for trade {t.get('trade_id')}: {exc}",
                 broker_id=broker.get("id"),
@@ -763,8 +997,8 @@ def _auto_trade_loop():
     while True:
         try:
             _run_auto_trade_cycle()
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag_event("error", "cycle_exception", error=str(exc))
         try:
             state = get_account_state()
             interval = float(state.get("auto_trade_interval_sec", 2) or 2)
