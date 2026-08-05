@@ -13,7 +13,7 @@ function jsonResponse(payload, ok = true, status = 200) {
   });
 }
 
-function createFetchMock({ trainShouldFail = false } = {}) {
+function createFetchMock({ trainShouldFail = false, hedgeEnabled = true, hedgeThreshold = -0.05, hedgeSlots = 2 } = {}) {
   return vi.fn((url, options = {}) => {
     const method = String(options.method || "GET").toUpperCase();
     const fullUrl = String(url || "");
@@ -28,6 +28,9 @@ function createFetchMock({ trainShouldFail = false } = {}) {
         enable_real_trade: false,
         auto_trade_enabled: false,
         keep_terminal_alive: true,
+        hedge_enabled: hedgeEnabled,
+        hedge_threshold: hedgeThreshold,
+        hedge_slots: hedgeSlots,
       });
     }
 
@@ -168,5 +171,16 @@ describe("AccountMonitor adaptive ML toolkit", () => {
     await user.click(await screen.findByTestId("ml-train-btn"));
 
     expect(await screen.findByText(/train failed|Retrain model gagal/i)).toBeInTheDocument();
+  });
+
+  it("shows hedge controls and current enabled or disabled status", async () => {
+    global.fetch = createFetchMock({ hedgeEnabled: false, hedgeThreshold: -0.08, hedgeSlots: 3 });
+
+    render(<AccountMonitor />);
+
+    expect(await screen.findByLabelText("Hedge Enabled")).not.toBeChecked();
+    expect(screen.getByDisplayValue("-0.08")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("3")).toBeInTheDocument();
+    expect(screen.getByText("DISABLED")).toBeInTheDocument();
   });
 });

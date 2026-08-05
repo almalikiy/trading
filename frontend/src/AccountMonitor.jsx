@@ -73,6 +73,9 @@ export default function AccountMonitor() {
   const [autoTradeRiskHybridAddonMode, setAutoTradeRiskHybridAddonMode] = useState("balance_scaled");
   const [autoTradeRiskAdaptiveWindowDays, setAutoTradeRiskAdaptiveWindowDays] = useState(90);
   const [autoTradeRiskAdaptiveMinTrades, setAutoTradeRiskAdaptiveMinTrades] = useState(12);
+  const [autoTradeHedgeEnabled, setAutoTradeHedgeEnabled] = useState(true);
+  const [autoTradeHedgeThreshold, setAutoTradeHedgeThreshold] = useState(-0.05);
+  const [autoTradeHedgeSlots, setAutoTradeHedgeSlots] = useState(2);
   const [autoTradeRiskPercent, setAutoTradeRiskPercent] = useState(1);
   const [autoTradeUseAccountBalance, setAutoTradeUseAccountBalance] = useState(true);
   const [autoTradeUseAvailableMargin, setAutoTradeUseAvailableMargin] = useState(true);
@@ -161,6 +164,9 @@ export default function AccountMonitor() {
         setAutoTradeRiskHybridAddonMode(String(data.auto_trade_risk_hybrid_addon_mode || "balance_scaled"));
         setAutoTradeRiskAdaptiveWindowDays(Number(data.auto_trade_risk_adaptive_window_days ?? 90));
         setAutoTradeRiskAdaptiveMinTrades(Number(data.auto_trade_risk_adaptive_min_trades ?? 12));
+        setAutoTradeHedgeEnabled(data.hedge_enabled !== false);
+        setAutoTradeHedgeThreshold(Number(data.hedge_threshold ?? -0.05));
+        setAutoTradeHedgeSlots(Number(data.hedge_slots ?? 2));
         setAutoTradeRiskPercent(Number(data.auto_trade_risk_percent ?? 1));
         setAutoTradeUseAccountBalance(data.auto_trade_use_account_balance !== false);
         setAutoTradeUseAvailableMargin(data.auto_trade_use_available_margin !== false);
@@ -364,6 +370,9 @@ export default function AccountMonitor() {
     setAutoTradeRiskHybridAddonMode(String(data.auto_trade_risk_hybrid_addon_mode || "balance_scaled"));
     setAutoTradeRiskAdaptiveWindowDays(Number(data.auto_trade_risk_adaptive_window_days ?? 90));
     setAutoTradeRiskAdaptiveMinTrades(Number(data.auto_trade_risk_adaptive_min_trades ?? 12));
+    setAutoTradeHedgeEnabled(data.hedge_enabled !== false);
+    setAutoTradeHedgeThreshold(Number(data.hedge_threshold ?? -0.05));
+    setAutoTradeHedgeSlots(Number(data.hedge_slots ?? 2));
     setAutoTradeRiskPercent(Number(data.auto_trade_risk_percent ?? 1));
     setAutoTradeUseAccountBalance(data.auto_trade_use_account_balance !== false);
     setAutoTradeUseAvailableMargin(data.auto_trade_use_available_margin !== false);
@@ -433,6 +442,18 @@ export default function AccountMonitor() {
         throw new Error(data.message || data.detail || "Gagal mengambil batasan auto-trade.");
       }
       setAutoTradeConstraints(data);
+      const currentSettings = data?.current_settings || {};
+      if (Object.prototype.hasOwnProperty.call(currentSettings, "hedge_enabled")) {
+        setAutoTradeHedgeEnabled(currentSettings.hedge_enabled !== false);
+      }
+      if (Object.prototype.hasOwnProperty.call(currentSettings, "hedge_threshold")) {
+        const value = Number(currentSettings.hedge_threshold);
+        if (Number.isFinite(value)) setAutoTradeHedgeThreshold(value);
+      }
+      if (Object.prototype.hasOwnProperty.call(currentSettings, "hedge_slots")) {
+        const value = Number(currentSettings.hedge_slots);
+        if (Number.isFinite(value)) setAutoTradeHedgeSlots(value);
+      }
       if (data?.symbol) {
         setAutoTradeSymbol(String(data.symbol));
       }
@@ -482,6 +503,9 @@ export default function AccountMonitor() {
           risk_hybrid_addon_mode: autoTradeRiskHybridAddonMode,
           risk_adaptive_window_days: Number(autoTradeRiskAdaptiveWindowDays || 90),
           risk_adaptive_min_trades: Number(autoTradeRiskAdaptiveMinTrades || 12),
+          hedge_enabled: !!autoTradeHedgeEnabled,
+          hedge_threshold: Number(autoTradeHedgeThreshold || -0.05),
+          hedge_slots: Math.max(0, Number(autoTradeHedgeSlots || 0)),
           risk_percent: Number(autoTradeRiskPercent || 1),
           use_account_balance: !!autoTradeUseAccountBalance,
           use_available_margin: !!autoTradeUseAvailableMargin,
@@ -793,9 +817,49 @@ const setDefaultBroker = async (id) => {
   };
 
   return (
-    <Box sx={{ p: 3 }}>
-      <Typography variant="h5" sx={{ mb: 2 }}>Account Monitor</Typography>
-      <Paper sx={{ p: 2, mb: 2 }}>
+    <Box
+      sx={{
+        p: { xs: 1.5, sm: 3 },
+        "& .MuiTypography-caption": {
+          fontSize: { xs: "0.82rem", sm: "0.75rem" },
+          lineHeight: { xs: 1.45, sm: 1.4 },
+        },
+        "& .MuiTypography-subtitle1": {
+          fontSize: { xs: "1.06rem", sm: "1rem" },
+        },
+        "& .MuiTypography-subtitle2": {
+          fontSize: { xs: "0.97rem", sm: "0.875rem" },
+        },
+        "& .MuiTypography-body2": {
+          fontSize: { xs: "0.93rem", sm: "0.875rem" },
+        },
+        "& .MuiFormLabel-root": {
+          fontSize: { xs: "0.98rem", sm: "0.95rem" },
+        },
+        "& .MuiInputBase-input": {
+          fontSize: { xs: "1rem", sm: "0.95rem" },
+          py: { xs: 1.25, sm: 1.0 },
+        },
+        "& .MuiFormHelperText-root": {
+          fontSize: { xs: "0.85rem", sm: "0.75rem" },
+          lineHeight: 1.35,
+        },
+        "& .MuiButton-root": {
+          fontSize: { xs: "0.95rem", sm: "0.875rem" },
+          minHeight: { xs: 42, sm: 36 },
+          px: { xs: 1.5, sm: 1.25 },
+        },
+        "& .MuiTableCell-root": {
+          fontSize: { xs: "0.9rem", sm: "0.875rem" },
+          py: { xs: 1.1, sm: 0.75 },
+        },
+        "& .MuiChip-label": {
+          fontSize: { xs: "0.82rem", sm: "0.78rem" },
+        },
+      }}
+    >
+      <Typography variant="h5" sx={{ mb: 2, fontSize: { xs: "1.35rem", sm: "1.5rem" } }}>Account Monitor</Typography>
+      <Paper sx={{ p: { xs: 1.5, sm: 2 }, mb: 2 }}>
         <Typography variant="subtitle1">Balance: ${state.balance?.toFixed(2)}</Typography>
         <Typography variant="subtitle2">Initial Balance: ${state.initial_balance?.toFixed(2)}</Typography>
         <Typography variant="subtitle2">Lot: {state.lot}</Typography>
@@ -948,7 +1012,47 @@ const setDefaultBroker = async (id) => {
                 <MenuItem value="risk_percent">Risk % per Trade</MenuItem>
                 <MenuItem value="balance_scaled">Balance Scaled Lot</MenuItem>
                 <MenuItem value="atr_dynamic">ATR Dynamic Lot</MenuItem>
+                <MenuItem value="hedge">Hedge Recovery</MenuItem>
               </TextField>
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1, minHeight: 40 }}>
+                <FormControlLabel
+                  control={<Switch checked={autoTradeHedgeEnabled} onChange={(e) => setAutoTradeHedgeEnabled(e.target.checked)} />}
+                  label="Hedge Enabled"
+                />
+                <Chip
+                  size="small"
+                  color={autoTradeHedgeEnabled ? "success" : "default"}
+                  label={autoTradeHedgeEnabled ? "ENABLED" : "DISABLED"}
+                />
+              </Box>
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Hedge Threshold (ratio)"
+                type="number"
+                value={autoTradeHedgeThreshold}
+                onChange={(e) => setAutoTradeHedgeThreshold(Number(e.target.value))}
+                inputProps={{ min: -0.5, max: -0.001, step: 0.001 }}
+                helperText="Contoh -0.05 = -5% equity"
+                disabled={!autoTradeHedgeEnabled}
+              />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Hedge Slots"
+                type="number"
+                value={autoTradeHedgeSlots}
+                onChange={(e) => setAutoTradeHedgeSlots(Number(e.target.value))}
+                inputProps={{ min: 0, max: 10, step: 1 }}
+                helperText="Slot hedge tambahan di luar posisi normal"
+                disabled={!autoTradeHedgeEnabled}
+              />
             </Grid>
             <Grid item xs={12} md={4}>
               <TextField
