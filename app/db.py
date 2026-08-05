@@ -60,6 +60,9 @@ AUTO_TRADE_PROFILE_KEYS = [
     "auto_trade_risk_hybrid_addon_mode",
     "auto_trade_risk_adaptive_window_days",
     "auto_trade_risk_adaptive_min_trades",
+    "hedge_enabled",
+    "hedge_threshold",
+    "hedge_slots",
 ]
 
 
@@ -75,6 +78,9 @@ AUTO_TRADE_RISK_POLICY_DEFAULTS = {
     "auto_trade_risk_hybrid_addon_mode": "balance_scaled",
     "auto_trade_risk_adaptive_window_days": 90,
     "auto_trade_risk_adaptive_min_trades": 12,
+    "hedge_enabled": True,
+    "hedge_threshold": -0.05,
+    "hedge_slots": 2,
 }
 
 
@@ -1222,7 +1228,8 @@ def list_open_trades(broker_id=None):
                 """
                 SELECT trade_id, type, symbol, lot, ticket, entry, entryTime,
                       tpValue, slValue, broker_id, broker_name, account_id, platform,
-                       execution_mode, terminal_path
+                      execution_mode, terminal_path, risk_mode, signal_score,
+                      margin_usage_pct, equity, balance, spread_points
                 FROM trade_history
                 WHERE status = 'open'
                 ORDER BY entryTime ASC, id ASC
@@ -1233,7 +1240,8 @@ def list_open_trades(broker_id=None):
                 """
                 SELECT trade_id, type, symbol, lot, ticket, entry, entryTime,
                       tpValue, slValue, broker_id, broker_name, account_id, platform,
-                       execution_mode, terminal_path
+                      execution_mode, terminal_path, risk_mode, signal_score,
+                      margin_usage_pct, equity, balance, spread_points
                 FROM trade_history
                 WHERE status = 'open' AND broker_id = ?
                 ORDER BY entryTime ASC, id ASC
@@ -1257,6 +1265,12 @@ def list_open_trades(broker_id=None):
             "platform": row["platform"],
             "execution_mode": row["execution_mode"],
             "terminal_path": row["terminal_path"],
+            "risk_mode": row["risk_mode"],
+            "signal_score": row["signal_score"],
+            "margin_usage_pct": row["margin_usage_pct"],
+            "equity": row["equity"],
+            "balance": row["balance"],
+            "spread_points": row["spread_points"],
         }
         for row in rows
     ]

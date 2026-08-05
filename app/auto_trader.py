@@ -658,9 +658,263 @@ def _risk_based_lot(state, constraints, metrics, manual_lot, sl_value, atr_value
 
 def _normalize_risk_mode(mode):
     value = str(mode or "fixed_lot").strip().lower()
-    if value in ("fixed_lot", "risk_percent", "balance_scaled", "atr_dynamic"):
+    if value in ("fixed_lot", "risk_percent", "balance_scaled", "atr_dynamic", "hedge"):
         return value
     return "fixed_lot"
+
+
+def _is_hedge_trade(row):
+    trade_type = str((row or {}).get("type") or "").strip().lower()
+    risk_mode = str((row or {}).get("risk_mode") or "").strip().lower()
+    return trade_type in ("hedge_buy", "hedge_sell") or risk_mode == "hedge"
+
+
+def _floating_loss_ratio_from_metrics(metrics):
+    balance = _coerce_float((metrics or {}).get("balance"), 0.0)
+    equity = _coerce_float((metrics or {}).get("equity"), 0.0)
+    if equity <= 0:
+        return 0.0
+    return (equity - balance) / equity
+
+
+def log_hedge_event(event):
+    payload = dict(event or {})
+    payload["timestamp"] = int(payload.get("timestamp") or time.time())
+    payload["decision"] = payload.get("decision") or "hedge_triggered"
+    payload["risk_mode"] = "hedge"
+    return log_auto_trade_event(payload)
+
+
+def trigger_hedge(trade, features):
+    ctx = dict(trade or {})
+    feat = dict(features or {})
+
+    state = ctx.get("state") or {}
+    broker = ctx.get("broker")
+    symbol = str(ctx.get("symbol") or state.get("auto_trade_symbol") or "XAUUSD").strip() or "XAUUSD"
+    metrics = ctx.get("metrics") or {}
+    open_rows = list(ctx.get("open_rows") or [])
+    if not broker:
+        return {"status": "skip", "reason": "no_broker"}
+
+    if not bool(state.get("hedge_enabled", True)):
+        return {"status": "skip", "reason": "hedge_disabled"}
+
+    hedge_threshold = _coerce_float(state.get("hedge_threshold"), -0.05)
+    hedge_slots = max(0, _coerce_int(state.get("hedge_slots"), 2))
+    floating_loss_ratio = _coerce_float(feat.get("floating_loss_ratio"), _floating_loss_ratio_from_metrics(metrics))
+
+    hedge_open_rows = [row for row in open_rows if _is_hedge_trade(row)]
+    if hedge_slots <= 0 or len(hedge_open_rows) >= hedge_slots:
+        return {"status": "skip", "reason": "hedge_slots_full"}
+    if floating_loss_ratio > hedge_threshold:
+        return {"status": "skip", "reason": "hedge_not_required"}
+
+    normal_rows = [row for row in open_rows if not _is_hedge_trade(row)]
+    buy_lots = sum(_coerce_float(row.get("lot"), 0.0) for row in normal_rows if str(row.get("type") or "").upper() == "BUY")
+    sell_lots = sum(_coerce_float(row.get("lot"), 0.0) for row in normal_rows if str(row.get("type") or "").upper() == "SELL")
+    if buy_lots <= 0 and sell_lots <= 0:
+        return {"status": "skip", "reason": "no_exposure_to_hedge"}
+
+    hedge_direction = "sell" if buy_lots >= sell_lots else "buy"
+    hedge_type = "hedge_sell" if hedge_direction == "sell" else "hedge_buy"
+    dominant_exposure = max(buy_lots, sell_lots)
+
+    constraints = ctx.get("constraints") or get_broker_symbol_constraints(broker, symbol=symbol, auto_start=False)
+    base_lot = max(0.01, _coerce_float(state.get("lot"), 0.01))
+    hedge_lot = min(dominant_exposure, base_lot)
+    if hedge_lot <= 0:
+        hedge_lot = base_lot
+    if constraints.get("can_open_order") and constraints.get("volume_step"):
+        hedge_lot = normalize_lot_with_constraints(hedge_lot, constraints)
+    if hedge_lot <= 0:
+        return {"status": "skip", "reason": "invalid_hedge_lot"}
+
+    adapter, method = get_broker_adapter(broker, broker.get("execution_mode"))
+    result = adapter.open_trade(symbol, hedge_lot, hedge_direction)
+    order = (result or {}).get("order") or {}
+    now = int(time.time())
+    trade_id = str(uuid.uuid4())
+
+    estimated_margin = _coerce_float((metrics or {}).get("estimated_margin_per_lot"), 0.0) * hedge_lot
+    margin_free = _coerce_float((metrics or {}).get("margin_free"), 0.0)
+    margin_usage_pct = (estimated_margin / margin_free) * 100.0 if margin_free > 0 and estimated_margin > 0 else None
+    balance = _coerce_float((metrics or {}).get("balance"), 0.0)
+    equity = _coerce_float((metrics or {}).get("equity"), balance)
+
+    open_payload = {
+        "trade_id": trade_id,
+        "status": "open",
+        "type": hedge_type,
+        "symbol": symbol,
+        "lot": hedge_lot,
+        "ticket": order.get("ticket"),
+        "entry": order.get("price"),
+        "entryTime": now,
+        "reason": f"hedge_open:floating={floating_loss_ratio:.4f}",
+        "tpValue": None,
+        "slValue": None,
+        "broker_id": broker.get("id"),
+        "broker_name": broker.get("name"),
+        "account_id": (metrics or {}).get("account_id"),
+        "platform": broker.get("platform"),
+        "execution_mode": method,
+        "terminal_path": broker.get("terminal_path"),
+        "risk_mode": "hedge",
+        "signal_score": _coerce_float(feat.get("signal_score"), 0.0),
+        "spread_points": _coerce_int((metrics or {}).get("spread_points"), -1),
+        "margin_usage_pct": margin_usage_pct,
+        "equity": equity,
+        "balance": balance,
+        "session_hour": datetime.now().hour,
+    }
+    create_trade_open_record(open_payload)
+    log_trade(
+        open_payload,
+        features={
+            "spread_points": open_payload.get("spread_points"),
+            "signal_score": open_payload.get("signal_score"),
+            "margin_usage_pct": margin_usage_pct,
+            "balance": balance,
+            "equity": equity,
+            "session_time": open_payload.get("session_hour"),
+        },
+        result={"status": "open", "risk_mode": "hedge"},
+    )
+
+    log_hedge_event(
+        {
+            "timestamp": now,
+            "event_type": "hedge_open",
+            "decision": "hedge_triggered",
+            "trade_id": trade_id,
+            "broker_id": broker.get("id"),
+            "broker_name": broker.get("name"),
+            "account_id": (metrics or {}).get("account_id"),
+            "symbol": symbol,
+            "signal_score": open_payload.get("signal_score"),
+            "spread_points": open_payload.get("spread_points"),
+            "margin_usage_pct": margin_usage_pct,
+            "equity": equity,
+            "balance": balance,
+            "lot": hedge_lot,
+            "profit": None,
+            "rr": floating_loss_ratio,
+            "reason": "floating_loss_threshold_breached",
+            "payload": {
+                "hedge_threshold": hedge_threshold,
+                "floating_loss_ratio": floating_loss_ratio,
+                "hedge_type": hedge_type,
+            },
+        }
+    )
+    return {"status": "ok", "trade_id": trade_id, "ticket": order.get("ticket"), "hedge_type": hedge_type}
+
+
+def release_hedge(trade_id):
+    open_rows = list_open_trades()
+    target = None
+    for row in open_rows:
+        if str(row.get("trade_id") or "") == str(trade_id) and _is_hedge_trade(row):
+            target = row
+            break
+    if not target:
+        return {"status": "skip", "reason": "hedge_trade_not_found"}
+
+    broker = get_broker(target.get("broker_id")) if target.get("broker_id") else get_default_broker()
+    if not broker:
+        return {"status": "error", "reason": "broker_not_found"}
+
+    adapter, _ = get_broker_adapter(broker, target.get("execution_mode"))
+    symbol = str(target.get("symbol") or "XAUUSD")
+    ticket = _coerce_int(target.get("ticket"), 0)
+    lot = max(0.01, _coerce_float(target.get("lot"), 0.01))
+    if ticket <= 0:
+        return {"status": "error", "reason": "invalid_ticket"}
+
+    result = adapter.close_trade(symbol, lot, ticket)
+    order = (result or {}).get("order") or {}
+    now = int(time.time())
+
+    close_payload = {
+        "trade_id": target.get("trade_id"),
+        "status": "closed",
+        "type": target.get("type"),
+        "symbol": symbol,
+        "lot": lot,
+        "ticket": ticket,
+        "entry": target.get("entry"),
+        "exit": order.get("price"),
+        "profit": order.get("profit"),
+        "entryTime": target.get("entryTime"),
+        "exitTime": now,
+        "reason": "hedge_close:market_normalized",
+        "broker_id": target.get("broker_id"),
+        "broker_name": target.get("broker_name"),
+        "account_id": target.get("account_id"),
+        "platform": target.get("platform"),
+        "execution_mode": target.get("execution_mode"),
+        "terminal_path": target.get("terminal_path"),
+        "risk_mode": "hedge",
+        "signal_score": target.get("signal_score"),
+        "spread_points": target.get("spread_points"),
+        "margin_usage_pct": target.get("margin_usage_pct"),
+        "equity": target.get("equity"),
+        "balance": target.get("balance"),
+        "session_hour": datetime.now().hour,
+    }
+    log_trade(
+        close_payload,
+        features={
+            "spread_points": close_payload.get("spread_points"),
+            "signal_score": close_payload.get("signal_score"),
+            "margin_usage_pct": close_payload.get("margin_usage_pct"),
+            "balance": close_payload.get("balance"),
+            "equity": close_payload.get("equity"),
+            "session_time": close_payload.get("session_hour"),
+        },
+        result={"status": "closed", "risk_mode": "hedge", "profit": close_payload.get("profit")},
+    )
+    close_trade_record(
+        close_payload.get("trade_id"),
+        exit_price=close_payload.get("exit"),
+        profit=close_payload.get("profit"),
+        exit_time=now,
+        ticket=ticket,
+        reason="hedge_close:market_normalized",
+    )
+
+    log_hedge_event(
+        {
+            "timestamp": now,
+            "event_type": "hedge_close",
+            "decision": "hedge_triggered",
+            "trade_id": close_payload.get("trade_id"),
+            "broker_id": close_payload.get("broker_id"),
+            "broker_name": close_payload.get("broker_name"),
+            "account_id": close_payload.get("account_id"),
+            "symbol": close_payload.get("symbol"),
+            "signal_score": close_payload.get("signal_score"),
+            "spread_points": close_payload.get("spread_points"),
+            "margin_usage_pct": close_payload.get("margin_usage_pct"),
+            "equity": close_payload.get("equity"),
+            "balance": close_payload.get("balance"),
+            "lot": close_payload.get("lot"),
+            "profit": close_payload.get("profit"),
+            "rr": None,
+            "reason": "hedge_release_condition_met",
+        }
+    )
+    return {"status": "ok", "trade_id": close_payload.get("trade_id")}
+
+
+def _should_release_hedge(state, metrics, hedge_rows):
+    if not hedge_rows:
+        return False
+    floating_loss_ratio = _floating_loss_ratio_from_metrics(metrics)
+    threshold = _coerce_float((state or {}).get("hedge_threshold"), -0.05)
+    release_threshold = min(-0.005, threshold * 0.5)
+    return floating_loss_ratio > release_threshold
 
 
 def _select_effective_risk_mode(state, metrics, signal_score, atr_value, open_rows, symbol, broker_id):
@@ -720,7 +974,7 @@ def _select_effective_risk_mode(state, metrics, signal_score, atr_value, open_ro
             }
         )
         ml_mode = _normalize_risk_mode((ml_result or {}).get("risk_mode"))
-        if ml_mode in ("fixed_lot", "risk_percent", "balance_scaled", "atr_dynamic"):
+        if ml_mode in ("fixed_lot", "risk_percent", "balance_scaled", "atr_dynamic", "hedge"):
             selected = ml_mode
             reason = "adaptive_ml_prediction"
             return selected, reason, strategy, ml_result
@@ -889,9 +1143,61 @@ def _run_auto_trade_cycle():
 
     open_rows = list_open_trades()
     _cleanup_runtime_for_open_trades(open_rows)
+    normal_open_rows = [row for row in open_rows if not _is_hedge_trade(row)]
+    hedge_open_rows = [row for row in open_rows if _is_hedge_trade(row)]
     max_open_trades = max(1, _coerce_int(state.get("max_open_trades", 1), 1))
 
-    if len(open_rows) < max_open_trades and signal in ("buy", "sell"):
+    hedge_broker = auto_open_broker or feed_broker
+    hedge_metrics = {}
+    hedge_constraints = {}
+    if hedge_broker:
+        try:
+            hedge_metrics = get_broker_account_metrics(hedge_broker, symbol=symbol, auto_start=False) or {}
+            hedge_constraints = get_broker_symbol_constraints(hedge_broker, symbol=symbol, auto_start=False) or {}
+        except Exception as exc:
+            log_mt5_error(
+                f"hedge precheck failed: {exc}",
+                broker_id=(hedge_broker or {}).get("id"),
+                broker_name=(hedge_broker or {}).get("name"),
+                account_id=(hedge_metrics or {}).get("account_id"),
+            )
+
+    if _should_release_hedge(state, hedge_metrics, hedge_open_rows):
+        for hedge_row in hedge_open_rows:
+            try:
+                release_hedge(hedge_row.get("trade_id"))
+            except Exception as exc:
+                log_mt5_error(
+                    f"hedge release failed for {hedge_row.get('trade_id')}: {exc}",
+                    broker_id=hedge_row.get("broker_id"),
+                    broker_name=hedge_row.get("broker_name"),
+                    account_id=hedge_row.get("account_id"),
+                )
+
+    try:
+        trigger_hedge(
+            {
+                "state": state,
+                "broker": hedge_broker,
+                "symbol": symbol,
+                "metrics": hedge_metrics,
+                "constraints": hedge_constraints,
+                "open_rows": open_rows,
+            },
+            {
+                "floating_loss_ratio": _floating_loss_ratio_from_metrics(hedge_metrics),
+                "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+            },
+        )
+    except Exception as exc:
+        log_mt5_error(
+            f"hedge trigger failed: {exc}",
+            broker_id=(hedge_broker or {}).get("id"),
+            broker_name=(hedge_broker or {}).get("name"),
+            account_id=(hedge_metrics or {}).get("account_id"),
+        )
+
+    if len(normal_open_rows) < max_open_trades and signal in ("buy", "sell"):
         broker = auto_open_broker
         if not broker:
             _diag_open_attempt("error", reason="no_broker", symbol=symbol, signal=signal)
@@ -1026,6 +1332,24 @@ def _run_auto_trade_cycle():
                 },
             }
         )
+        if effective_risk_mode == "hedge":
+            trigger_hedge(
+                {
+                    "state": state,
+                    "broker": broker,
+                    "symbol": symbol,
+                    "metrics": metrics,
+                    "constraints": constraints,
+                    "open_rows": open_rows,
+                },
+                {
+                    "floating_loss_ratio": _floating_loss_ratio_from_metrics(metrics),
+                    "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+                },
+            )
+            _diag_event("action", "hedge_triggered_by_adaptive_ml", symbol=symbol, signal=signal)
+            return
+
         lot_to_open = _risk_based_lot(
             state,
             constraints,
@@ -1216,7 +1540,7 @@ def _run_auto_trade_cycle():
         _diag_event("action", "open_trade_created", symbol=symbol, signal=signal)
         return
 
-    if len(open_rows) >= max_open_trades and signal in ("buy", "sell"):
+    if len(normal_open_rows) >= max_open_trades and signal in ("buy", "sell"):
         _diag_event("skip", "max_open_trades_reached", symbol=symbol, signal=signal)
     elif signal == "wait":
         _diag_event(
@@ -1228,6 +1552,8 @@ def _run_auto_trade_cycle():
         )
 
     for t in open_rows:
+        if _is_hedge_trade(t):
+            continue
         broker = get_broker(t.get("broker_id")) if t.get("broker_id") else get_default_broker()
         if not broker:
             continue

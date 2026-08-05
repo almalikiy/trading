@@ -107,6 +107,9 @@ class AutoTradeConfigRequest(BaseModel):
     risk_hybrid_addon_mode: str | None = None
     risk_adaptive_window_days: int | None = None
     risk_adaptive_min_trades: int | None = None
+    hedge_enabled: bool | None = None
+    hedge_threshold: float | None = None
+    hedge_slots: int | None = None
 
 @router.post("/account/set_analytic_tpsl")
 def set_analytic_tpsl(request: AnalyticTPSLRequest):
@@ -851,8 +854,8 @@ def set_auto_trade_config(payload: AutoTradeConfigRequest):
 
     if payload.risk_mode is not None:
         risk_mode = str(payload.risk_mode).strip().lower()
-        if risk_mode not in ("fixed_lot", "risk_percent", "balance_scaled", "atr_dynamic"):
-            return {"status": "error", "message": "Risk mode harus fixed_lot, risk_percent, balance_scaled, atau atr_dynamic."}
+        if risk_mode not in ("fixed_lot", "risk_percent", "balance_scaled", "atr_dynamic", "hedge"):
+            return {"status": "error", "message": "Risk mode harus fixed_lot, risk_percent, balance_scaled, atr_dynamic, atau hedge."}
         state["auto_trade_risk_mode"] = risk_mode
 
     if payload.risk_percent is not None:
@@ -1089,6 +1092,21 @@ def set_auto_trade_config(payload: AutoTradeConfigRequest):
             return {"status": "error", "message": "Adaptive min trades harus antara 3 sampai 5000."}
         state["auto_trade_risk_adaptive_min_trades"] = value
 
+    if payload.hedge_enabled is not None:
+        state["hedge_enabled"] = bool(payload.hedge_enabled)
+
+    if payload.hedge_threshold is not None:
+        value = float(payload.hedge_threshold)
+        if value > -0.001 or value < -0.5:
+            return {"status": "error", "message": "Hedge threshold harus antara -0.5 sampai -0.001."}
+        state["hedge_threshold"] = value
+
+    if payload.hedge_slots is not None:
+        value = int(payload.hedge_slots)
+        if value < 0 or value > 10:
+            return {"status": "error", "message": "Hedge slots harus antara 0 sampai 10."}
+        state["hedge_slots"] = value
+
     state["auto_trade_symbol"] = _resolve_auto_trade_symbol_for_state(state)
 
     # Keep global state updated as fallback, and persist profile for active broker/account.
@@ -1122,6 +1140,9 @@ def set_auto_trade_config(payload: AutoTradeConfigRequest):
         "risk_hybrid_addon_mode": state.get("auto_trade_risk_hybrid_addon_mode", "balance_scaled"),
         "risk_adaptive_window_days": state.get("auto_trade_risk_adaptive_window_days", 90),
         "risk_adaptive_min_trades": state.get("auto_trade_risk_adaptive_min_trades", 12),
+        "hedge_enabled": bool(state.get("hedge_enabled", True)),
+        "hedge_threshold": state.get("hedge_threshold", -0.05),
+        "hedge_slots": state.get("hedge_slots", 2),
         "risk_percent": state.get("auto_trade_risk_percent", 1.0),
         "use_account_balance": bool(state.get("auto_trade_use_account_balance", True)),
         "use_available_margin": bool(state.get("auto_trade_use_available_margin", True)),
@@ -1202,6 +1223,9 @@ def get_auto_trade_constraints():
             "risk_hybrid_addon_mode": state.get("auto_trade_risk_hybrid_addon_mode", "balance_scaled"),
             "risk_adaptive_window_days": state.get("auto_trade_risk_adaptive_window_days", 90),
             "risk_adaptive_min_trades": state.get("auto_trade_risk_adaptive_min_trades", 12),
+            "hedge_enabled": bool(state.get("hedge_enabled", True)),
+            "hedge_threshold": state.get("hedge_threshold", -0.05),
+            "hedge_slots": state.get("hedge_slots", 2),
             "risk_percent": state.get("auto_trade_risk_percent", 1.0),
             "use_account_balance": bool(state.get("auto_trade_use_account_balance", True)),
             "use_available_margin": bool(state.get("auto_trade_use_available_margin", True)),

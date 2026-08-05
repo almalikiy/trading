@@ -16,7 +16,7 @@ except Exception:
     _SKLEARN_AVAILABLE = False
 
 
-RISK_MODES = ["fixed_lot", "risk_percent", "balance_scaled", "atr_dynamic"]
+RISK_MODES = ["fixed_lot", "risk_percent", "balance_scaled", "atr_dynamic", "hedge"]
 FEATURE_COLUMNS = [
     "atr",
     "spread_points",
