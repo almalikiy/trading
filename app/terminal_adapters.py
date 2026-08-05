@@ -233,34 +233,44 @@ class MT5Adapter(TerminalAdapter):
             )
             raise RuntimeError(error_msg)
         price = tick.bid if pos.type == mt5.POSITION_TYPE_BUY else tick.ask
-        req = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": lot,
-            "type": order_type,
-            "position": ticket,
-            "price": price,
-            "deviation": 20,
-            "magic": 0,
-            "comment": "",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
-        }
-        result = mt5.order_send(req)
+        filling_modes = [mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN, mt5.ORDER_FILLING_IOC]
+        result = None
+        last_error = "unknown"
+        for filling_mode in filling_modes:
+            req = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": lot,
+                "type": order_type,
+                "position": ticket,
+                "price": price,
+                "deviation": 20,
+                "magic": 0,
+                "comment": "",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": filling_mode,
+            }
+            result = mt5.order_send(req)
+            if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                mt5.shutdown()
+                return {"status": "ok", "order": {**result._asdict(), "account_id": account_id, "broker_name": self.broker_name}}
+            if result:
+                last_error = f"{result.retcode} {result.comment}"
+            else:
+                last_error = "order_send returned None"
+
         mt5.shutdown()
 
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
+        if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
             error_msg = (
                 f"Order close failed on {symbol} "
-                f"(Broker: {self.broker_name}, Ticket: {ticket}, Lot: {lot}): {result.retcode} {result.comment}"
+                f"(Broker: {self.broker_name}, Ticket: {ticket}, Lot: {lot}): {last_error}"
             )
             log_mt5_error(
                 f"close_trade context: broker={self.broker_name}, account_id={account_id}, symbol={symbol}, "
-                f"lot={lot}, ticket={ticket}, retcode={result.retcode}, comment={result.comment}, source=backend"
+                f"lot={lot}, ticket={ticket}, last_error={last_error}, tried_filling_modes={filling_modes}, source=backend"
             )
             raise RuntimeError(error_msg)
-
-        return {"status": "ok", "order": {**result._asdict(), "account_id": account_id, "broker_name": self.broker_name}}
 
 
 class MouseAdapter(TerminalAdapter):
