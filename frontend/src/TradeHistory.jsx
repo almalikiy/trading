@@ -22,9 +22,38 @@ import {
   MenuItem,
   Grid,
   Chip,
+  TableSortLabel,
 } from "@mui/material";
 
 const API_BASE = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+
+function compareValues(a, b, direction = "asc") {
+  if (a === b) return 0;
+  const order = direction === "asc" ? 1 : -1;
+
+  if (a === null || a === undefined) return 1;
+  if (b === null || b === undefined) return -1;
+
+  if (typeof a === "number" && typeof b === "number") {
+    return a > b ? order : -order;
+  }
+
+  const av = String(a).toLowerCase();
+  const bv = String(b).toLowerCase();
+  if (av === bv) return 0;
+  return av > bv ? order : -order;
+}
+
+function getTradeSortValue(row, key) {
+  if (key === "entryTime" || key === "exitTime") return Number(row[key] || 0);
+  if (key === "profit" || key === "entry" || key === "exit") return Number(row[key] || 0);
+  return row[key] ?? "";
+}
+
+function getErrorSortValue(row, key) {
+  if (key === "timestamp") return Number(row.timestamp || 0);
+  return row[key] ?? "";
+}
 
 function parseHistoryStatusChips(reason, executionMode) {
   const text = String(reason || "");
@@ -70,6 +99,8 @@ export default function TradeHistory() {
     broker: "all",
     accountId: "",
   });
+  const [tradeSort, setTradeSort] = useState({ key: "entryTime", direction: "desc" });
+  const [errorSort, setErrorSort] = useState({ key: "timestamp", direction: "desc" });
 
   const loadTradeHistory = () =>
     fetch(`${API_BASE}/trade/history`)
@@ -132,6 +163,32 @@ export default function TradeHistory() {
     const matchesAccount = !errorFilters.accountId || String(row.account_id || "").includes(errorFilters.accountId.trim());
     return matchesSearch && matchesBroker && matchesAccount;
   });
+
+  const sortedTradeHistory = [...filteredTradeHistory].sort((a, b) => {
+    const av = getTradeSortValue(a, tradeSort.key);
+    const bv = getTradeSortValue(b, tradeSort.key);
+    return compareValues(av, bv, tradeSort.direction);
+  });
+
+  const sortedErrorLog = [...filteredErrorLog].sort((a, b) => {
+    const av = getErrorSortValue(a, errorSort.key);
+    const bv = getErrorSortValue(b, errorSort.key);
+    return compareValues(av, bv, errorSort.direction);
+  });
+
+  const toggleTradeSort = (key) => {
+    setTradeSort((prev) => ({
+      key,
+      direction: prev.key === key && prev.direction === "asc" ? "desc" : "asc",
+    }));
+  };
+
+  const toggleErrorSort = (key) => {
+    setErrorSort((prev) => ({
+      key,
+      direction: prev.key === key && prev.direction === "asc" ? "desc" : "asc",
+    }));
+  };
 
   const handleForceClose = () => {
     setForceCloseLoading(true);
@@ -261,14 +318,46 @@ export default function TradeHistory() {
               <Table size="small" stickyHeader>
                 <TableHead>
                   <TableRow>
-                    <TableCell width={160}>Time</TableCell>
-                    <TableCell width={180}>Broker</TableCell>
-                    <TableCell width={140}>Account</TableCell>
-                    <TableCell>Error Message</TableCell>
+                    <TableCell width={160}>
+                      <TableSortLabel
+                        active={errorSort.key === "timestamp"}
+                        direction={errorSort.key === "timestamp" ? errorSort.direction : "asc"}
+                        onClick={() => toggleErrorSort("timestamp")}
+                      >
+                        Time
+                      </TableSortLabel>
+                    </TableCell>
+                    <TableCell width={180}>
+                      <TableSortLabel
+                        active={errorSort.key === "broker_name"}
+                        direction={errorSort.key === "broker_name" ? errorSort.direction : "asc"}
+                        onClick={() => toggleErrorSort("broker_name")}
+                      >
+                        Broker
+                      </TableSortLabel>
+                    </TableCell>
+                    <TableCell width={140}>
+                      <TableSortLabel
+                        active={errorSort.key === "account_id"}
+                        direction={errorSort.key === "account_id" ? errorSort.direction : "asc"}
+                        onClick={() => toggleErrorSort("account_id")}
+                      >
+                        Account
+                      </TableSortLabel>
+                    </TableCell>
+                    <TableCell>
+                      <TableSortLabel
+                        active={errorSort.key === "message"}
+                        direction={errorSort.key === "message" ? errorSort.direction : "asc"}
+                        onClick={() => toggleErrorSort("message")}
+                      >
+                        Error Message
+                      </TableSortLabel>
+                    </TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {filteredErrorLog.map((row, idx) => (
+                  {sortedErrorLog.map((row, idx) => (
                     <TableRow key={idx}>
                       <TableCell>{new Date(row.timestamp * 1000).toLocaleString()}</TableCell>
                       <TableCell>{row.broker_name || "-"}</TableCell>
@@ -364,21 +453,101 @@ export default function TradeHistory() {
             <TableHead>
               <TableRow>
                 <TableCell>No</TableCell>
-                <TableCell>Type</TableCell>
-                <TableCell>Entry</TableCell>
-                <TableCell>Exit</TableCell>
-                <TableCell>Profit</TableCell>
-                <TableCell>Entry Time</TableCell>
-                <TableCell>Exit Time</TableCell>
-                <TableCell>Reason</TableCell>
+                <TableCell>
+                  <TableSortLabel
+                    active={tradeSort.key === "type"}
+                    direction={tradeSort.key === "type" ? tradeSort.direction : "asc"}
+                    onClick={() => toggleTradeSort("type")}
+                  >
+                    Type
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell>
+                  <TableSortLabel
+                    active={tradeSort.key === "entry"}
+                    direction={tradeSort.key === "entry" ? tradeSort.direction : "asc"}
+                    onClick={() => toggleTradeSort("entry")}
+                  >
+                    Entry
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell>
+                  <TableSortLabel
+                    active={tradeSort.key === "exit"}
+                    direction={tradeSort.key === "exit" ? tradeSort.direction : "asc"}
+                    onClick={() => toggleTradeSort("exit")}
+                  >
+                    Exit
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell>
+                  <TableSortLabel
+                    active={tradeSort.key === "profit"}
+                    direction={tradeSort.key === "profit" ? tradeSort.direction : "asc"}
+                    onClick={() => toggleTradeSort("profit")}
+                  >
+                    Profit
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell>
+                  <TableSortLabel
+                    active={tradeSort.key === "entryTime"}
+                    direction={tradeSort.key === "entryTime" ? tradeSort.direction : "asc"}
+                    onClick={() => toggleTradeSort("entryTime")}
+                  >
+                    Entry Time
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell>
+                  <TableSortLabel
+                    active={tradeSort.key === "exitTime"}
+                    direction={tradeSort.key === "exitTime" ? tradeSort.direction : "asc"}
+                    onClick={() => toggleTradeSort("exitTime")}
+                  >
+                    Exit Time
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell>
+                  <TableSortLabel
+                    active={tradeSort.key === "reason"}
+                    direction={tradeSort.key === "reason" ? tradeSort.direction : "asc"}
+                    onClick={() => toggleTradeSort("reason")}
+                  >
+                    Reason
+                  </TableSortLabel>
+                </TableCell>
                 <TableCell>Status</TableCell>
-                <TableCell>Broker</TableCell>
-                <TableCell>Account</TableCell>
-                <TableCell>Exec</TableCell>
+                <TableCell>
+                  <TableSortLabel
+                    active={tradeSort.key === "broker_name"}
+                    direction={tradeSort.key === "broker_name" ? tradeSort.direction : "asc"}
+                    onClick={() => toggleTradeSort("broker_name")}
+                  >
+                    Broker
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell>
+                  <TableSortLabel
+                    active={tradeSort.key === "account_id"}
+                    direction={tradeSort.key === "account_id" ? tradeSort.direction : "asc"}
+                    onClick={() => toggleTradeSort("account_id")}
+                  >
+                    Account
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell>
+                  <TableSortLabel
+                    active={tradeSort.key === "execution_mode"}
+                    direction={tradeSort.key === "execution_mode" ? tradeSort.direction : "asc"}
+                    onClick={() => toggleTradeSort("execution_mode")}
+                  >
+                    Exec
+                  </TableSortLabel>
+                </TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {filteredTradeHistory.map((row, idx) => {
+              {sortedTradeHistory.map((row, idx) => {
                 const statusChips = parseHistoryStatusChips(row.reason, row.execution_mode);
                 return (
                   <TableRow key={idx}>
