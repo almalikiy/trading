@@ -5,6 +5,8 @@ from .logic import log_mt5_error
 from datetime import datetime
 import subprocess
 import os
+import time
+import threading
 from pydantic import BaseModel
 from .broker_routes import TradeOpenRequest, open_trade_v2
 from .terminal_adapters import (
@@ -182,8 +184,74 @@ def mt5_error_log():
     return get_mt5_error_log()
 
 
+def _mt5_error_kind(message: str):
+    text = str(message or "")
+    if text.startswith("history_deals_get exception"):
+        return "history_deals_get_exception"
+    if text.startswith("history_deals_get failed"):
+        return "history_deals_get_failed"
+    if text.startswith("history_deals_get fallback failed"):
+        return "history_deals_get_fallback_failed"
+    if text.startswith("Terminal sync failed for broker"):
+        return "terminal_sync_failed"
+    if text.startswith("Auto close failed for trade"):
+        return "auto_close_failed"
+    if text.startswith("Partial TP failed for trade"):
+        return "partial_tp_failed"
+    if text.startswith("close_trade context:"):
+        return "close_trade_context"
+    return "other"
+
+
+@router.get("/mt5/error_log_summary")
+def mt5_error_log_summary(window_minutes: int = 180, limit: int = 5000):
+    from .db import get_mt5_error_log
+
+    safe_window = max(1, min(int(window_minutes or 180), 24 * 60))
+    safe_limit = max(100, min(int(limit or 5000), 50000))
+    since = int(time.time()) - safe_window * 60
+
+    rows = [row for row in get_mt5_error_log(limit=safe_limit) if int(row.get("timestamp") or 0) >= since]
+
+    by_broker = {}
+    by_kind = {}
+    for row in rows:
+        broker = row.get("broker_name") or "-"
+        kind = _mt5_error_kind(row.get("message"))
+        by_broker[broker] = by_broker.get(broker, 0) + 1
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+
+    return {
+        "status": "ok",
+        "window_minutes": safe_window,
+        "total": len(rows),
+        "by_broker": sorted(
+            [{"broker": k, "count": v} for k, v in by_broker.items()],
+            key=lambda x: x["count"],
+            reverse=True,
+        ),
+        "by_kind": sorted(
+            [{"kind": k, "count": v} for k, v in by_kind.items()],
+            key=lambda x: x["count"],
+            reverse=True,
+        ),
+    }
+
+
+@router.post("/mt5/error_log/clear")
+def mt5_error_log_clear():
+    from .db import clear_mt5_error_log
+
+    clear_mt5_error_log()
+    return {"status": "ok"}
+
+
 from .logic import analyze_symbol, get_signal_snapshot, get_ohlcv_snapshot
 from .auto_trader import is_auto_trader_thread_started
+
+_SYNC_LOCK = threading.Lock()
+_LAST_TERMINAL_SYNC_TS = 0.0
+_SYNC_MIN_INTERVAL_SEC = 15.0
 
 def save_trade_history(trade):
     insert_trade(trade)
@@ -208,6 +276,13 @@ def _resolve_auto_trade_broker_for_state(state):
 
 
 def _sync_terminal_trade_views():
+    global _LAST_TERMINAL_SYNC_TS
+    now = time.time()
+    with _SYNC_LOCK:
+        if now - _LAST_TERMINAL_SYNC_TS < _SYNC_MIN_INTERVAL_SEC:
+            return
+        _LAST_TERMINAL_SYNC_TS = now
+
     state = get_account_state()
     history_days = None if state.get("trade_history_sync_all") else int(state.get("trade_history_sync_days") or 90)
     sync_all_terminal_trade_state(history_days=history_days)

@@ -1093,10 +1093,20 @@ def clear_trade_history():
 
 
 def log_mt5_error(message, broker_id=None, broker_name=None, account_id=None, timestamp=None):
+    if message is None:
+        safe_message = ""
+    elif isinstance(message, str):
+        safe_message = message
+    else:
+        try:
+            safe_message = json.dumps(message, ensure_ascii=True, default=str)
+        except Exception:
+            safe_message = str(message)
+
     with get_db() as conn:
         conn.execute(
             "INSERT INTO mt5_error_log (timestamp, message, broker_id, broker_name, account_id) VALUES (?, ?, ?, ?, ?)",
-            (int(timestamp or time.time()), message, broker_id, broker_name, account_id),
+            (int(timestamp or time.time()), safe_message, broker_id, broker_name, account_id),
         )
 
 

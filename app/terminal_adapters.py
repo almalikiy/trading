@@ -16,6 +16,8 @@ _PROCESS_CACHE_LOCK = threading.Lock()
 _BROKER_STATUS_CACHE = {}
 _BROKER_STATUS_REFRESHING = set()
 _BROKER_STATUS_LOCK = threading.Lock()
+_SYNC_ERROR_THROTTLE = {}
+_SYNC_ERROR_LOCK = threading.Lock()
 
 
 def ensure_terminal_running(terminal_path: Optional[str]):
@@ -61,6 +63,19 @@ def _list_process_paths():
         return paths
     except Exception:
         return set()
+
+
+def _log_mt5_error_throttled(message, *, broker_id=None, broker_name=None, account_id=None, key=None, cooldown_sec=30):
+    now = time.time()
+    throttle_key = key or f"{broker_id}:{broker_name}:{message}"
+    with _SYNC_ERROR_LOCK:
+        last_ts = _SYNC_ERROR_THROTTLE.get(throttle_key, 0.0)
+        if now - last_ts < float(cooldown_sec):
+            return False
+        _SYNC_ERROR_THROTTLE[throttle_key] = now
+
+    log_mt5_error(message, broker_id=broker_id, broker_name=broker_name, account_id=account_id)
+    return True
 
 
 class TerminalAdapter:
@@ -201,15 +216,10 @@ class MT5Adapter(TerminalAdapter):
         if not position:
             mt5.shutdown()
             error_msg = f"No open position with ticket {ticket} (Broker: {self.broker_name}, Symbol: {symbol})"
-            log_mt5_error({
-                "broker": self.broker_name,
-                "account_id": account_id,
-                "symbol": symbol,
-                "lot": lot,
-                "ticket": ticket,
-                "error": "Position not found",
-                "source": "backend"
-            })
+            log_mt5_error(
+                f"close_trade context: broker={self.broker_name}, account_id={account_id}, "
+                f"symbol={symbol}, lot={lot}, ticket={ticket}, error=Position not found, source=backend"
+            )
             raise RuntimeError(error_msg)
         pos = position[0]
         order_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
@@ -217,15 +227,10 @@ class MT5Adapter(TerminalAdapter):
         if not tick:
             mt5.shutdown()
             error_msg = f"No tick data for {symbol}"
-            log_mt5_error({
-                "broker": self.broker_name,
-                "account_id": account_id,
-                "symbol": symbol,
-                "lot": lot,
-                "ticket": ticket,
-                "error": "No tick data",
-                "source": "backend"
-            })
+            log_mt5_error(
+                f"close_trade context: broker={self.broker_name}, account_id={account_id}, "
+                f"symbol={symbol}, lot={lot}, ticket={ticket}, error=No tick data, source=backend"
+            )
             raise RuntimeError(error_msg)
         price = tick.bid if pos.type == mt5.POSITION_TYPE_BUY else tick.ask
         req = {
@@ -249,15 +254,10 @@ class MT5Adapter(TerminalAdapter):
                 f"Order close failed on {symbol} "
                 f"(Broker: {self.broker_name}, Ticket: {ticket}, Lot: {lot}): {result.retcode} {result.comment}"
             )
-            log_mt5_error({
-                "broker": self.broker_name,
-                "account_id": account_id,
-                "symbol": symbol,
-                "lot": lot,
-                "ticket": ticket,
-                "error": f"{result.retcode} {result.comment}",
-                "source": "backend"
-            })
+            log_mt5_error(
+                f"close_trade context: broker={self.broker_name}, account_id={account_id}, symbol={symbol}, "
+                f"lot={lot}, ticket={ticket}, retcode={result.retcode}, comment={result.comment}, source=backend"
+            )
             raise RuntimeError(error_msg)
 
         return {"status": "ok", "order": {**result._asdict(), "account_id": account_id, "broker_name": self.broker_name}}
@@ -848,11 +848,30 @@ def _fetch_history_deals_resilient(broker, from_date, to_date):
         if deals_raw is not None:
             return list(deals_raw), True, "ok"
         err = mt5.last_error()
-        primary_error = f"history_deals_get failed: {err}"
-        log_mt5_error(primary_error, broker_id=broker_id, broker_name=broker_name)
+        primary_error = (
+            f"history_deals_get failed [phase=primary, from={from_date.isoformat()}, "
+            f"to={to_date.isoformat()}, last_error={err}]"
+        )
+        _log_mt5_error_throttled(
+            primary_error,
+            broker_id=broker_id,
+            broker_name=broker_name,
+            key=f"deals_primary_failed:{broker_id}:{err}",
+            cooldown_sec=45,
+        )
     except Exception as exc:
-        primary_error = f"history_deals_get exception: {exc}"
-        log_mt5_error(primary_error, broker_id=broker_id, broker_name=broker_name)
+        err = mt5.last_error()
+        primary_error = (
+            f"history_deals_get exception [phase=primary, from={from_date.isoformat()}, "
+            f"to={to_date.isoformat()}, exc={exc}, last_error={err}]"
+        )
+        _log_mt5_error_throttled(
+            primary_error,
+            broker_id=broker_id,
+            broker_name=broker_name,
+            key=f"deals_primary_exception:{broker_id}:{err}",
+            cooldown_sec=45,
+        )
 
     # Fallback: query in smaller windows to avoid MT5 API failures on large ranges.
     cursor = from_date
@@ -876,10 +895,13 @@ def _fetch_history_deals_resilient(broker, from_date, to_date):
         return merged, True, "chunked"
 
     if fallback_errors:
-        log_mt5_error(
-            "history_deals_get fallback failed: " + " | ".join(fallback_errors[:4]),
+        _log_mt5_error_throttled(
+            "history_deals_get fallback failed [phase=chunked, from="
+            f"{from_date.isoformat()}, to={to_date.isoformat()}]: " + " | ".join(fallback_errors[:4]),
             broker_id=broker_id,
             broker_name=broker_name,
+            key=f"deals_fallback_failed:{broker_id}:{fallback_errors[0] if fallback_errors else 'unknown'}",
+            cooldown_sec=45,
         )
     return [], False, primary_error
 
@@ -1013,10 +1035,12 @@ def sync_broker_trade_state(broker, history_days: Optional[int] = 90):
             "errors": errors,
         }
     except Exception as exc:
-        log_mt5_error(
+        _log_mt5_error_throttled(
             f"Terminal sync failed for broker {broker.get('name')}: {exc}",
             broker_id=broker.get("id"),
             broker_name=broker.get("name"),
+            key=f"terminal_sync_failed:{broker.get('id')}:{exc}",
+            cooldown_sec=45,
         )
         return {"broker_id": broker.get("id"), "synced": False, "reason": str(exc)}
     finally:
