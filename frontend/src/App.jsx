@@ -114,6 +114,13 @@ function buildTradeStatusChips(trade) {
   return chips;
 }
 
+function formatTradeTime(epochSeconds) {
+  if (!epochSeconds) return "-";
+  const value = Number(epochSeconds);
+  if (!Number.isFinite(value) || value <= 0) return "-";
+  return new Date(value * 1000).toLocaleString();
+}
+
 export default function App( { darkMode, setDarkMode }) {
   const [engine, setEngine] = useState("mt5");
   const [tradeMode, setTradeMode] = useState("scalp");
@@ -973,6 +980,7 @@ export default function App( { darkMode, setDarkMode }) {
                     <TableCell>Symbol</TableCell>
                     <TableCell>Lot</TableCell>
                     <TableCell>Entry</TableCell>
+                    <TableCell>Open Time</TableCell>
                     <TableCell>Current</TableCell>
                     <TableCell>Floating</TableCell>
                     <TableCell>TP</TableCell>
@@ -997,6 +1005,7 @@ export default function App( { darkMode, setDarkMode }) {
                         <TableCell>{trade.symbol || "-"}</TableCell>
                         <TableCell>{trade.lot ?? "-"}</TableCell>
                         <TableCell>{trade.entry ?? "-"}</TableCell>
+                        <TableCell>{formatTradeTime(trade.entryTime)}</TableCell>
                         <TableCell>{lastPrice ?? "-"}</TableCell>
                         <TableCell sx={{ color: floating < 0 ? "error.main" : "success.main", fontWeight: 700 }}>
                           {Number(floating).toFixed(2)}
