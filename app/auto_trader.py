@@ -20,6 +20,7 @@ from .db import (
     resolve_feed_broker,
     save_account_state,
     update_open_trade_tpsl,
+    get_risk_mode_performance,
 )
 from .logic import analyze_symbol, fetch_ohlcv
 from .terminal_adapters import (
@@ -279,6 +280,7 @@ def _apply_partial_take_profit(state, trade_row, runtime, adapter, symbol, ticke
 
     base_risk = max(1e-6, _coerce_float(runtime.get("base_risk"), 1e-6))
     rr_now = _profit_distance(direction, entry, last_price) / base_risk
+    runtime["rr_now"] = rr_now
     if rr_now <= 0:
         return False
 
@@ -346,6 +348,7 @@ def _apply_break_even_lock(state, trade_row, runtime, direction, entry, last_pri
 
     base_risk = max(1e-6, _coerce_float(runtime.get("base_risk"), 1e-6))
     rr_now = _profit_distance(direction, entry, last_price) / base_risk
+    runtime["rr_now"] = rr_now
     trigger_rr = max(0.2, min(5.0, _coerce_float(state.get("auto_trade_break_even_rr"), 1.0)))
     if rr_now < trigger_rr:
         return None
@@ -588,8 +591,8 @@ def _last_auto_action_at():
     return 0
 
 
-def _risk_based_lot(state, constraints, metrics, manual_lot, sl_value, atr_value=None):
-    risk_mode = str(state.get("auto_trade_risk_mode") or "fixed_lot").strip().lower()
+def _risk_based_lot(state, constraints, metrics, manual_lot, sl_value, atr_value=None, risk_mode_override=None):
+    risk_mode = str(risk_mode_override or state.get("auto_trade_risk_mode") or "fixed_lot").strip().lower()
     if risk_mode == "fixed_lot":
         return float(manual_lot)
 
@@ -650,6 +653,82 @@ def _risk_based_lot(state, constraints, metrics, manual_lot, sl_value, atr_value
         return float(manual_lot)
 
     return max(0.0, risk_amount / loss_per_lot)
+
+
+def _normalize_risk_mode(mode):
+    value = str(mode or "fixed_lot").strip().lower()
+    if value in ("fixed_lot", "risk_percent", "balance_scaled", "atr_dynamic"):
+        return value
+    return "fixed_lot"
+
+
+def _select_effective_risk_mode(state, metrics, signal_score, atr_value, open_rows, symbol, broker_id):
+    manual_mode = _normalize_risk_mode(state.get("auto_trade_risk_mode"))
+    strategy = str(state.get("auto_trade_risk_selector_strategy") or "manual").strip().lower()
+    spread_points = _coerce_int((metrics or {}).get("spread_points"), -1)
+    balance = _coerce_float((metrics or {}).get("balance"), _coerce_float(state.get("balance"), 0.0))
+    conf = _coerce_float(signal_score, 0.0)
+    atr = _coerce_float(atr_value, 0.0)
+
+    atr_threshold = max(0.0, _coerce_float(state.get("auto_trade_risk_atr_threshold"), 12.0))
+    balance_threshold = max(0.0, _coerce_float(state.get("auto_trade_risk_balance_fixed_threshold"), 500.0))
+    confidence_threshold = max(0.0, min(1.0, _coerce_float(state.get("auto_trade_risk_confidence_threshold"), 0.70)))
+    spread_fixed_threshold = max(0, _coerce_int(state.get("auto_trade_risk_spread_fixed_threshold"), 120))
+    spread_low_threshold = max(0, _coerce_int(state.get("auto_trade_risk_spread_low_threshold"), 60))
+    hybrid_addon_rr_threshold = max(0.2, _coerce_float(state.get("auto_trade_risk_hybrid_addon_rr_threshold"), 2.0))
+    hybrid_entry_mode = _normalize_risk_mode(state.get("auto_trade_risk_hybrid_entry_mode") or "risk_percent")
+    hybrid_addon_mode = _normalize_risk_mode(state.get("auto_trade_risk_hybrid_addon_mode") or "balance_scaled")
+
+    selected = manual_mode
+    reason = "manual"
+
+    if strategy == "rule_based":
+        if balance > 0 and balance < balance_threshold:
+            selected, reason = "fixed_lot", "rule_balance_low"
+        elif atr > 0 and atr >= atr_threshold:
+            selected, reason = "atr_dynamic", "rule_atr_high"
+        elif conf >= confidence_threshold:
+            selected, reason = "risk_percent", "rule_confident_signal"
+    elif strategy == "condition_driven":
+        if spread_points >= 0 and spread_points >= spread_fixed_threshold:
+            selected, reason = "fixed_lot", "condition_spread_high"
+        elif spread_points >= 0 and spread_points <= spread_low_threshold and conf >= confidence_threshold:
+            selected, reason = "balance_scaled", "condition_spread_low_confident"
+        elif conf >= confidence_threshold:
+            selected, reason = "risk_percent", "condition_confident_signal"
+    elif strategy == "hybrid":
+        selected, reason = hybrid_entry_mode, "hybrid_entry_mode"
+        if open_rows:
+            strongest_rr = 0.0
+            for row in open_rows:
+                runtime = _TRADE_RUNTIME.get(row.get("trade_id")) or {}
+                rr_now = _coerce_float(runtime.get("rr_now"), 0.0)
+                strongest_rr = max(strongest_rr, rr_now)
+            if strongest_rr >= hybrid_addon_rr_threshold:
+                selected, reason = hybrid_addon_mode, "hybrid_addon_mode"
+    elif strategy == "adaptive":
+        perf_rows = get_risk_mode_performance(
+            window_days=max(7, _coerce_int(state.get("auto_trade_risk_adaptive_window_days"), 90)),
+            broker_id=broker_id,
+            account_id=(metrics or {}).get("account_id"),
+            symbol=symbol,
+        )
+        min_trades = max(3, _coerce_int(state.get("auto_trade_risk_adaptive_min_trades"), 12))
+        scored = []
+        for row in perf_rows:
+            total = int(row.get("total") or 0)
+            if total < min_trades:
+                continue
+            score = (_coerce_float(row.get("winrate"), 0.0) * 0.7) + (_coerce_float(row.get("avg_profit"), 0.0) * 0.3)
+            scored.append((score, _normalize_risk_mode(row.get("risk_mode"))))
+        if scored:
+            scored.sort(key=lambda item: item[0], reverse=True)
+            selected = scored[0][1]
+            reason = "adaptive_best_history"
+        else:
+            reason = "adaptive_fallback_manual"
+
+    return selected, reason, strategy
 
 
 def _passes_margin_guards(state, metrics, lot_to_open):
@@ -886,7 +965,57 @@ def _run_auto_trade_cycle():
             sl_for_risk = round(1 * manual_lot, 2)
         if bool(state.get("auto_trade_use_atr_tpsl", True)) and atr_value and atr_value > 0:
             sl_for_risk = atr_value * max(0.2, min(10.0, _coerce_float(state.get("auto_trade_atr_sl_mult"), 1.5)))
-        lot_to_open = _risk_based_lot(state, constraints, metrics, manual_lot, sl_for_risk, atr_value=atr_value)
+        effective_risk_mode, risk_mode_reason, risk_selector_strategy = _select_effective_risk_mode(
+            state,
+            metrics,
+            _coerce_float(signal_scoring.get("score"), 0.0),
+            atr_value,
+            open_rows,
+            symbol,
+            broker.get("id"),
+        )
+        estimated_margin = _coerce_float((metrics or {}).get("estimated_margin_per_lot"), 0.0) * max(0.0, _coerce_float(state.get("lot"), 0.0))
+        margin_free_snapshot = _coerce_float((metrics or {}).get("margin_free"), 0.0)
+        margin_usage_snapshot = (estimated_margin / margin_free_snapshot) * 100.0 if margin_free_snapshot > 0 and estimated_margin > 0 else None
+        log_auto_trade_event(
+            {
+                "timestamp": int(time.time()),
+                "event_type": "analysis",
+                "decision": "open_candidate",
+                "reason": risk_mode_reason,
+                "broker_id": broker.get("id"),
+                "broker_name": broker.get("name"),
+                "account_id": (metrics or {}).get("account_id"),
+                "symbol": symbol,
+                "signal": signal,
+                "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+                "spread_points": spread_points if spread_points >= 0 else None,
+                "max_spread_points": max_spread_points,
+                "margin_free": margin_free_snapshot,
+                "equity": _coerce_float((metrics or {}).get("equity"), _coerce_float((metrics or {}).get("balance"), 0.0)),
+                "balance": _coerce_float((metrics or {}).get("balance"), 0.0),
+                "margin_usage_pct": margin_usage_snapshot,
+                "atr_value": atr_value,
+                "trailing_mode": state.get("auto_trade_trailing_mode"),
+                "risk_mode": effective_risk_mode,
+                "lot_mode": effective_risk_mode,
+                "lot": _coerce_float(state.get("lot"), 0.01),
+                "session_hour": current_hour,
+                "payload": {
+                    "risk_selector_strategy": risk_selector_strategy,
+                    "manual_mode": state.get("auto_trade_risk_mode"),
+                },
+            }
+        )
+        lot_to_open = _risk_based_lot(
+            state,
+            constraints,
+            metrics,
+            manual_lot,
+            sl_for_risk,
+            atr_value=atr_value,
+            risk_mode_override=effective_risk_mode,
+        )
 
         if constraints.get("can_open_order") and constraints.get("volume_step"):
             lot_to_open = normalize_lot_with_constraints(lot_to_open, constraints)
@@ -975,6 +1104,10 @@ def _run_auto_trade_cycle():
         order = result.get("order", {})
         now = int(time.time())
         trade_id = str(uuid.uuid4())
+        estimated_margin = _coerce_float((metrics or {}).get("estimated_margin_per_lot"), 0.0) * max(0.0, lot_to_open)
+        margin_free = _coerce_float((metrics or {}).get("margin_free"), 0.0)
+        equity = _coerce_float((metrics or {}).get("equity"), _coerce_float((metrics or {}).get("balance"), 0.0))
+        margin_usage_pct = (estimated_margin / margin_free) * 100.0 if margin_free > 0 and estimated_margin > 0 else None
 
         tp_value, sl_value = _resolve_initial_tpsl(state, lot_to_open, atr_value)
 
@@ -996,12 +1129,17 @@ def _run_auto_trade_cycle():
                 "platform": broker.get("platform"),
                 "execution_mode": method,
                 "terminal_path": broker.get("terminal_path"),
+                "trailing_mode": state.get("auto_trade_trailing_mode"),
+                "risk_mode": effective_risk_mode,
+                "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+                "spread_points": spread_points if spread_points >= 0 else None,
+                "margin_usage_pct": margin_usage_pct,
+                "equity": equity,
+                "balance": _coerce_float((metrics or {}).get("balance"), equity),
+                "atr_value": atr_value,
+                "session_hour": current_hour,
             }
         )
-        estimated_margin = _coerce_float((metrics or {}).get("estimated_margin_per_lot"), 0.0) * max(0.0, lot_to_open)
-        margin_free = _coerce_float((metrics or {}).get("margin_free"), 0.0)
-        equity = _coerce_float((metrics or {}).get("equity"), _coerce_float((metrics or {}).get("balance"), 0.0))
-        margin_usage_pct = (estimated_margin / margin_free) * 100.0 if margin_free > 0 and estimated_margin > 0 else None
         log_auto_trade_event(
             {
                 "timestamp": now,
@@ -1013,7 +1151,7 @@ def _run_auto_trade_cycle():
                 "symbol": symbol,
                 "signal": signal,
                 "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
-                "spread_points": _coerce_int((metrics or {}).get("spread_points"), None) if (metrics or {}).get("spread_points") is not None else None,
+                "spread_points": spread_points if spread_points >= 0 else None,
                 "max_spread_points": max_spread_points,
                 "margin_free": margin_free,
                 "equity": equity,
@@ -1021,10 +1159,15 @@ def _run_auto_trade_cycle():
                 "margin_usage_pct": margin_usage_pct,
                 "atr_value": atr_value,
                 "trailing_mode": state.get("auto_trade_trailing_mode"),
-                "risk_mode": state.get("auto_trade_risk_mode"),
-                "lot_mode": state.get("auto_trade_risk_mode"),
+                "risk_mode": effective_risk_mode,
+                "lot_mode": effective_risk_mode,
                 "lot": lot_to_open,
                 "session_hour": current_hour,
+                "payload": {
+                    "risk_selector_strategy": risk_selector_strategy,
+                    "risk_mode_reason": risk_mode_reason,
+                    "manual_mode": state.get("auto_trade_risk_mode"),
+                },
             }
         )
         _diag_open_attempt(

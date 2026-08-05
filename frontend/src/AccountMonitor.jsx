@@ -62,6 +62,17 @@ export default function AccountMonitor() {
   const [autoTradeTpValue, setAutoTradeTpValue] = useState(0.5);
   const [autoTradeSlValue, setAutoTradeSlValue] = useState(0.5);
   const [autoTradeRiskMode, setAutoTradeRiskMode] = useState("fixed_lot");
+  const [autoTradeRiskSelectorStrategy, setAutoTradeRiskSelectorStrategy] = useState("manual");
+  const [autoTradeRiskAtrThreshold, setAutoTradeRiskAtrThreshold] = useState(12);
+  const [autoTradeRiskBalanceFixedThreshold, setAutoTradeRiskBalanceFixedThreshold] = useState(500);
+  const [autoTradeRiskConfidenceThreshold, setAutoTradeRiskConfidenceThreshold] = useState(0.7);
+  const [autoTradeRiskSpreadFixedThreshold, setAutoTradeRiskSpreadFixedThreshold] = useState(120);
+  const [autoTradeRiskSpreadLowThreshold, setAutoTradeRiskSpreadLowThreshold] = useState(60);
+  const [autoTradeRiskHybridAddonRrThreshold, setAutoTradeRiskHybridAddonRrThreshold] = useState(2.0);
+  const [autoTradeRiskHybridEntryMode, setAutoTradeRiskHybridEntryMode] = useState("risk_percent");
+  const [autoTradeRiskHybridAddonMode, setAutoTradeRiskHybridAddonMode] = useState("balance_scaled");
+  const [autoTradeRiskAdaptiveWindowDays, setAutoTradeRiskAdaptiveWindowDays] = useState(90);
+  const [autoTradeRiskAdaptiveMinTrades, setAutoTradeRiskAdaptiveMinTrades] = useState(12);
   const [autoTradeRiskPercent, setAutoTradeRiskPercent] = useState(1);
   const [autoTradeUseAccountBalance, setAutoTradeUseAccountBalance] = useState(true);
   const [autoTradeUseAvailableMargin, setAutoTradeUseAvailableMargin] = useState(true);
@@ -132,6 +143,17 @@ export default function AccountMonitor() {
         setAutoTradeTpValue(Number(data.tp_value ?? 0.5));
         setAutoTradeSlValue(Number(data.sl_value ?? 0.5));
         setAutoTradeRiskMode(String(data.auto_trade_risk_mode || "fixed_lot"));
+        setAutoTradeRiskSelectorStrategy(String(data.auto_trade_risk_selector_strategy || "manual"));
+        setAutoTradeRiskAtrThreshold(Number(data.auto_trade_risk_atr_threshold ?? 12));
+        setAutoTradeRiskBalanceFixedThreshold(Number(data.auto_trade_risk_balance_fixed_threshold ?? 500));
+        setAutoTradeRiskConfidenceThreshold(Number(data.auto_trade_risk_confidence_threshold ?? 0.7));
+        setAutoTradeRiskSpreadFixedThreshold(Number(data.auto_trade_risk_spread_fixed_threshold ?? 120));
+        setAutoTradeRiskSpreadLowThreshold(Number(data.auto_trade_risk_spread_low_threshold ?? 60));
+        setAutoTradeRiskHybridAddonRrThreshold(Number(data.auto_trade_risk_hybrid_addon_rr_threshold ?? 2.0));
+        setAutoTradeRiskHybridEntryMode(String(data.auto_trade_risk_hybrid_entry_mode || "risk_percent"));
+        setAutoTradeRiskHybridAddonMode(String(data.auto_trade_risk_hybrid_addon_mode || "balance_scaled"));
+        setAutoTradeRiskAdaptiveWindowDays(Number(data.auto_trade_risk_adaptive_window_days ?? 90));
+        setAutoTradeRiskAdaptiveMinTrades(Number(data.auto_trade_risk_adaptive_min_trades ?? 12));
         setAutoTradeRiskPercent(Number(data.auto_trade_risk_percent ?? 1));
         setAutoTradeUseAccountBalance(data.auto_trade_use_account_balance !== false);
         setAutoTradeUseAvailableMargin(data.auto_trade_use_available_margin !== false);
@@ -324,6 +346,17 @@ export default function AccountMonitor() {
     setAutoTradeTpValue(Number(data.tp_value ?? 0.5));
     setAutoTradeSlValue(Number(data.sl_value ?? 0.5));
     setAutoTradeRiskMode(String(data.auto_trade_risk_mode || "fixed_lot"));
+    setAutoTradeRiskSelectorStrategy(String(data.auto_trade_risk_selector_strategy || "manual"));
+    setAutoTradeRiskAtrThreshold(Number(data.auto_trade_risk_atr_threshold ?? 12));
+    setAutoTradeRiskBalanceFixedThreshold(Number(data.auto_trade_risk_balance_fixed_threshold ?? 500));
+    setAutoTradeRiskConfidenceThreshold(Number(data.auto_trade_risk_confidence_threshold ?? 0.7));
+    setAutoTradeRiskSpreadFixedThreshold(Number(data.auto_trade_risk_spread_fixed_threshold ?? 120));
+    setAutoTradeRiskSpreadLowThreshold(Number(data.auto_trade_risk_spread_low_threshold ?? 60));
+    setAutoTradeRiskHybridAddonRrThreshold(Number(data.auto_trade_risk_hybrid_addon_rr_threshold ?? 2.0));
+    setAutoTradeRiskHybridEntryMode(String(data.auto_trade_risk_hybrid_entry_mode || "risk_percent"));
+    setAutoTradeRiskHybridAddonMode(String(data.auto_trade_risk_hybrid_addon_mode || "balance_scaled"));
+    setAutoTradeRiskAdaptiveWindowDays(Number(data.auto_trade_risk_adaptive_window_days ?? 90));
+    setAutoTradeRiskAdaptiveMinTrades(Number(data.auto_trade_risk_adaptive_min_trades ?? 12));
     setAutoTradeRiskPercent(Number(data.auto_trade_risk_percent ?? 1));
     setAutoTradeUseAccountBalance(data.auto_trade_use_account_balance !== false);
     setAutoTradeUseAvailableMargin(data.auto_trade_use_available_margin !== false);
@@ -431,6 +464,17 @@ export default function AccountMonitor() {
           lot: safeLot,
           max_open_trades: safeMaxOpen,
           risk_mode: autoTradeRiskMode,
+          risk_selector_strategy: autoTradeRiskSelectorStrategy,
+          risk_atr_threshold: Number(autoTradeRiskAtrThreshold || 0),
+          risk_balance_fixed_threshold: Number(autoTradeRiskBalanceFixedThreshold || 0),
+          risk_confidence_threshold: Number(autoTradeRiskConfidenceThreshold || 0),
+          risk_spread_fixed_threshold: Number(autoTradeRiskSpreadFixedThreshold || 0),
+          risk_spread_low_threshold: Number(autoTradeRiskSpreadLowThreshold || 0),
+          risk_hybrid_addon_rr_threshold: Number(autoTradeRiskHybridAddonRrThreshold || 2),
+          risk_hybrid_entry_mode: autoTradeRiskHybridEntryMode,
+          risk_hybrid_addon_mode: autoTradeRiskHybridAddonMode,
+          risk_adaptive_window_days: Number(autoTradeRiskAdaptiveWindowDays || 90),
+          risk_adaptive_min_trades: Number(autoTradeRiskAdaptiveMinTrades || 12),
           risk_percent: Number(autoTradeRiskPercent || 1),
           use_account_balance: !!autoTradeUseAccountBalance,
           use_available_margin: !!autoTradeUseAvailableMargin,
@@ -802,6 +846,23 @@ const setDefaultBroker = async (id) => {
                 fullWidth
                 select
                 size="small"
+                label="Risk Selector"
+                value={autoTradeRiskSelectorStrategy}
+                onChange={(e) => setAutoTradeRiskSelectorStrategy(e.target.value)}
+                helperText="Manual / rule-based / condition-driven / hybrid / adaptive"
+              >
+                <MenuItem value="manual">Manual</MenuItem>
+                <MenuItem value="rule_based">Rule-based Switching</MenuItem>
+                <MenuItem value="condition_driven">Condition-driven Adaptation</MenuItem>
+                <MenuItem value="hybrid">Hybrid Strategy</MenuItem>
+                <MenuItem value="adaptive">Adaptive (History-based)</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <TextField
+                fullWidth
+                select
+                size="small"
                 label="Risk Mode"
                 value={autoTradeRiskMode}
                 onChange={(e) => setAutoTradeRiskMode(e.target.value)}
@@ -812,6 +873,134 @@ const setDefaultBroker = async (id) => {
                 <MenuItem value="balance_scaled">Balance Scaled Lot</MenuItem>
                 <MenuItem value="atr_dynamic">ATR Dynamic Lot</MenuItem>
               </TextField>
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Rule ATR Threshold"
+                type="number"
+                value={autoTradeRiskAtrThreshold}
+                onChange={(e) => setAutoTradeRiskAtrThreshold(Number(e.target.value))}
+                inputProps={{ min: 0, step: 0.1 }}
+                disabled={autoTradeRiskSelectorStrategy === "manual"}
+              />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Rule Balance <$"
+                type="number"
+                value={autoTradeRiskBalanceFixedThreshold}
+                onChange={(e) => setAutoTradeRiskBalanceFixedThreshold(Number(e.target.value))}
+                inputProps={{ min: 0, step: 10 }}
+                disabled={autoTradeRiskSelectorStrategy === "manual"}
+              />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Selector Confidence"
+                type="number"
+                value={autoTradeRiskConfidenceThreshold}
+                onChange={(e) => setAutoTradeRiskConfidenceThreshold(Number(e.target.value))}
+                inputProps={{ min: 0, max: 1, step: 0.01 }}
+                disabled={autoTradeRiskSelectorStrategy === "manual"}
+              />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Spread Fixed Threshold"
+                type="number"
+                value={autoTradeRiskSpreadFixedThreshold}
+                onChange={(e) => setAutoTradeRiskSpreadFixedThreshold(Number(e.target.value))}
+                inputProps={{ min: 0, step: 1 }}
+                disabled={autoTradeRiskSelectorStrategy === "manual"}
+              />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Spread Low Threshold"
+                type="number"
+                value={autoTradeRiskSpreadLowThreshold}
+                onChange={(e) => setAutoTradeRiskSpreadLowThreshold(Number(e.target.value))}
+                inputProps={{ min: 0, step: 1 }}
+                disabled={autoTradeRiskSelectorStrategy === "manual"}
+              />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Hybrid Add-on RR"
+                type="number"
+                value={autoTradeRiskHybridAddonRrThreshold}
+                onChange={(e) => setAutoTradeRiskHybridAddonRrThreshold(Number(e.target.value))}
+                inputProps={{ min: 0.2, max: 10, step: 0.1 }}
+                disabled={autoTradeRiskSelectorStrategy !== "hybrid"}
+              />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <TextField
+                fullWidth
+                select
+                size="small"
+                label="Hybrid Entry Mode"
+                value={autoTradeRiskHybridEntryMode}
+                onChange={(e) => setAutoTradeRiskHybridEntryMode(e.target.value)}
+                disabled={autoTradeRiskSelectorStrategy !== "hybrid"}
+              >
+                <MenuItem value="fixed_lot">Fixed Lot</MenuItem>
+                <MenuItem value="risk_percent">Risk % per Trade</MenuItem>
+                <MenuItem value="balance_scaled">Balance Scaled Lot</MenuItem>
+                <MenuItem value="atr_dynamic">ATR Dynamic Lot</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <TextField
+                fullWidth
+                select
+                size="small"
+                label="Hybrid Add-on Mode"
+                value={autoTradeRiskHybridAddonMode}
+                onChange={(e) => setAutoTradeRiskHybridAddonMode(e.target.value)}
+                disabled={autoTradeRiskSelectorStrategy !== "hybrid"}
+              >
+                <MenuItem value="fixed_lot">Fixed Lot</MenuItem>
+                <MenuItem value="risk_percent">Risk % per Trade</MenuItem>
+                <MenuItem value="balance_scaled">Balance Scaled Lot</MenuItem>
+                <MenuItem value="atr_dynamic">ATR Dynamic Lot</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Adaptive Window (days)"
+                type="number"
+                value={autoTradeRiskAdaptiveWindowDays}
+                onChange={(e) => setAutoTradeRiskAdaptiveWindowDays(Number(e.target.value))}
+                inputProps={{ min: 7, max: 3650, step: 1 }}
+                disabled={autoTradeRiskSelectorStrategy !== "adaptive"}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Adaptive Min Trades"
+                type="number"
+                value={autoTradeRiskAdaptiveMinTrades}
+                onChange={(e) => setAutoTradeRiskAdaptiveMinTrades(Number(e.target.value))}
+                inputProps={{ min: 3, max: 5000, step: 1 }}
+                disabled={autoTradeRiskSelectorStrategy !== "adaptive"}
+              />
             </Grid>
             <Grid item xs={12} md={3}>
               <TextField

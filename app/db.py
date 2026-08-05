@@ -49,7 +49,33 @@ AUTO_TRADE_PROFILE_KEYS = [
     "auto_trade_break_even_offset_atr_mult",
     "auto_trade_trailing_mode",
     "auto_trade_stateful_trail_buffer_atr_mult",
+    "auto_trade_risk_selector_strategy",
+    "auto_trade_risk_atr_threshold",
+    "auto_trade_risk_balance_fixed_threshold",
+    "auto_trade_risk_confidence_threshold",
+    "auto_trade_risk_spread_fixed_threshold",
+    "auto_trade_risk_spread_low_threshold",
+    "auto_trade_risk_hybrid_addon_rr_threshold",
+    "auto_trade_risk_hybrid_entry_mode",
+    "auto_trade_risk_hybrid_addon_mode",
+    "auto_trade_risk_adaptive_window_days",
+    "auto_trade_risk_adaptive_min_trades",
 ]
+
+
+AUTO_TRADE_RISK_POLICY_DEFAULTS = {
+    "auto_trade_risk_selector_strategy": "manual",
+    "auto_trade_risk_atr_threshold": 12.0,
+    "auto_trade_risk_balance_fixed_threshold": 500.0,
+    "auto_trade_risk_confidence_threshold": 0.70,
+    "auto_trade_risk_spread_fixed_threshold": 120,
+    "auto_trade_risk_spread_low_threshold": 60,
+    "auto_trade_risk_hybrid_addon_rr_threshold": 2.0,
+    "auto_trade_risk_hybrid_entry_mode": "risk_percent",
+    "auto_trade_risk_hybrid_addon_mode": "balance_scaled",
+    "auto_trade_risk_adaptive_window_days": 90,
+    "auto_trade_risk_adaptive_min_trades": 12,
+}
 
 
 @contextmanager
@@ -76,6 +102,52 @@ def _add_column_if_missing(conn, table_name, column_name, sql_type):
 
 def _serialize_profile_payload(profile_dict):
     return {k: profile_dict.get(k) for k in AUTO_TRADE_PROFILE_KEYS if k in profile_dict}
+
+
+def get_auto_trade_risk_policy():
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT policy_json
+            FROM auto_trade_risk_policy
+            WHERE id = 1
+            LIMIT 1
+            """
+        ).fetchone()
+    if not row:
+        return dict(AUTO_TRADE_RISK_POLICY_DEFAULTS)
+    try:
+        loaded = json.loads(row["policy_json"] or "{}")
+    except Exception:
+        loaded = {}
+    if not isinstance(loaded, dict):
+        loaded = {}
+    policy = dict(AUTO_TRADE_RISK_POLICY_DEFAULTS)
+    for key in AUTO_TRADE_RISK_POLICY_DEFAULTS.keys():
+        if key in loaded:
+            policy[key] = loaded[key]
+    return policy
+
+
+def save_auto_trade_risk_policy(policy_dict):
+    current = get_auto_trade_risk_policy()
+    incoming = dict(policy_dict or {})
+    for key in AUTO_TRADE_RISK_POLICY_DEFAULTS.keys():
+        if key in incoming:
+            current[key] = incoming[key]
+    now = int(time.time())
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO auto_trade_risk_policy (id, policy_json, updated_at)
+            VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                policy_json = excluded.policy_json,
+                updated_at = excluded.updated_at
+            """,
+            (json.dumps(current, ensure_ascii=True), now),
+        )
+    return current
 
 
 def init_db():
@@ -337,6 +409,23 @@ def init_db():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auto_trade_risk_policy (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                policy_json TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO auto_trade_risk_policy (id, policy_json, updated_at)
+            VALUES (1, ?, ?)
+            ON CONFLICT(id) DO NOTHING
+            """,
+            (json.dumps(AUTO_TRADE_RISK_POLICY_DEFAULTS, ensure_ascii=True), int(time.time())),
+        )
         _add_column_if_missing(conn, "trade_history", "trailing_mode", "TEXT")
         _add_column_if_missing(conn, "trade_history", "risk_mode", "TEXT")
         _add_column_if_missing(conn, "trade_history", "signal_score", "REAL")
@@ -500,7 +589,7 @@ def get_account_state():
             """
         ).fetchone()
         if not row:
-            return {
+            state = {
                 "balance": 1000,
                 "initial_balance": 1000,
                 "enable_real_trade": False,
@@ -553,8 +642,10 @@ def get_account_state():
                 "auto_trade_stateful_trail_buffer_atr_mult": 0.5,
                 "history": [],
             }
+            state.update(get_auto_trade_risk_policy())
+            return state
         transactions = get_account_transactions(limit=200)
-        return {
+        state = {
             "balance": row["balance"],
             "initial_balance": row["initial_balance"],
             "enable_real_trade": bool(row["enable_real_trade"]),
@@ -607,9 +698,12 @@ def get_account_state():
             "auto_trade_stateful_trail_buffer_atr_mult": float(row["auto_trade_stateful_trail_buffer_atr_mult"] if row["auto_trade_stateful_trail_buffer_atr_mult"] is not None else 0.5),
             "history": transactions,
         }
+        state.update(get_auto_trade_risk_policy())
+        return state
 
 
 def save_account_state(state):
+    save_auto_trade_risk_policy(state)
     with get_db() as conn:
         conn.execute(
             """
@@ -1572,6 +1666,7 @@ def get_auto_trade_statistics(window_days=30, broker_id=None, account_id=None):
     rr_values = []
     hour_map = {}
     mode_map = {}
+    risk_mode_map = {}
     symbol_map = {}
     signal_bucket_map = {
         "lt_055": {"count": 0, "wins": 0},
@@ -1619,6 +1714,16 @@ def get_auto_trade_statistics(window_days=30, broker_id=None, account_id=None):
         if rr is not None:
             mode_bucket["rr_sum"] += rr
             mode_bucket["rr_count"] += 1
+
+        risk_mode = row.get("risk_mode") or (open_success_map.get(str(row.get("trade_id"))) or {}).get("risk_mode") or "unknown"
+        risk_bucket = risk_mode_map.setdefault(str(risk_mode), {"count": 0, "wins": 0, "profit": 0.0, "rr_sum": 0.0, "rr_count": 0})
+        risk_bucket["count"] += 1
+        risk_bucket["profit"] += profit
+        if profit > 0:
+            risk_bucket["wins"] += 1
+        if rr is not None:
+            risk_bucket["rr_sum"] += rr
+            risk_bucket["rr_count"] += 1
 
         symbol = str(row.get("symbol") or "-")
         symbol_bucket = symbol_map.setdefault(symbol, {"count": 0, "wins": 0, "profit": 0.0, "atr_sum": 0.0, "atr_count": 0})
@@ -1735,6 +1840,20 @@ def get_auto_trade_statistics(window_days=30, broker_id=None, account_id=None):
             key=lambda item: item["count"],
             reverse=True,
         ),
+        "risk_mode_performance": sorted(
+            [
+                {
+                    "mode": mode,
+                    "count": value["count"],
+                    "winrate": (value["wins"] / value["count"] * 100.0) if value["count"] else 0.0,
+                    "average_rr": (value["rr_sum"] / value["rr_count"]) if value["rr_count"] else 0.0,
+                    "profit": value["profit"],
+                }
+                for mode, value in risk_mode_map.items()
+            ],
+            key=lambda item: item["count"],
+            reverse=True,
+        ),
         "symbol_volatility": sorted(
             [
                 {
@@ -1750,6 +1869,46 @@ def get_auto_trade_statistics(window_days=30, broker_id=None, account_id=None):
             reverse=True,
         ),
     }
+
+
+def get_risk_mode_performance(window_days=90, broker_id=None, account_id=None, symbol=None):
+    window_days = max(1, min(int(window_days or 90), 3650))
+    since = int(time.time()) - (window_days * 86400)
+    with get_db() as conn:
+        clauses = ["status = 'closed'", "COALESCE(exitTime, entryTime, 0) >= ?", "COALESCE(risk_mode, '') != ''"]
+        params = [since]
+        if broker_id is not None:
+            clauses.append("COALESCE(broker_id, -1) = ?")
+            params.append(int(broker_id))
+        if account_id is not None:
+            clauses.append("COALESCE(account_id, -1) = ?")
+            params.append(int(account_id))
+        if symbol:
+            clauses.append("symbol = ?")
+            params.append(str(symbol))
+        rows = conn.execute(
+            f"""
+            SELECT risk_mode, COUNT(*) AS total,
+                   SUM(CASE WHEN COALESCE(profit, 0) > 0 THEN 1 ELSE 0 END) AS wins,
+                   AVG(COALESCE(profit, 0)) AS avg_profit,
+                   SUM(COALESCE(profit, 0)) AS net_profit
+            FROM trade_history
+            WHERE {' AND '.join(clauses)}
+            GROUP BY risk_mode
+            """,
+            params,
+        ).fetchall()
+    return [
+        {
+            "risk_mode": row["risk_mode"],
+            "total": int(row["total"] or 0),
+            "wins": int(row["wins"] or 0),
+            "winrate": (float(row["wins"] or 0) / float(row["total"] or 1)) * 100.0,
+            "avg_profit": float(row["avg_profit"] or 0.0),
+            "net_profit": float(row["net_profit"] or 0.0),
+        }
+        for row in rows
+    ]
 
 
 def _normalize_broker_execution_mode(platform, execution_mode):

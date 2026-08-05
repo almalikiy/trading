@@ -94,6 +94,17 @@ class AutoTradeConfigRequest(BaseModel):
     break_even_offset_atr_mult: float | None = None
     trailing_mode: str | None = None
     stateful_trail_buffer_atr_mult: float | None = None
+    risk_selector_strategy: str | None = None
+    risk_atr_threshold: float | None = None
+    risk_balance_fixed_threshold: float | None = None
+    risk_confidence_threshold: float | None = None
+    risk_spread_fixed_threshold: int | None = None
+    risk_spread_low_threshold: int | None = None
+    risk_hybrid_addon_rr_threshold: float | None = None
+    risk_hybrid_entry_mode: str | None = None
+    risk_hybrid_addon_mode: str | None = None
+    risk_adaptive_window_days: int | None = None
+    risk_adaptive_min_trades: int | None = None
 
 @router.post("/account/set_analytic_tpsl")
 def set_analytic_tpsl(request: AnalyticTPSLRequest):
@@ -924,6 +935,72 @@ def set_auto_trade_config(payload: AutoTradeConfigRequest):
             return {"status": "error", "message": "Stateful trail buffer ATR mult harus antara 0 sampai 5."}
         state["auto_trade_stateful_trail_buffer_atr_mult"] = value
 
+    if payload.risk_selector_strategy is not None:
+        value = str(payload.risk_selector_strategy).strip().lower()
+        if value not in ("manual", "rule_based", "condition_driven", "hybrid", "adaptive"):
+            return {"status": "error", "message": "Risk selector strategy harus manual, rule_based, condition_driven, hybrid, atau adaptive."}
+        state["auto_trade_risk_selector_strategy"] = value
+
+    if payload.risk_atr_threshold is not None:
+        value = float(payload.risk_atr_threshold)
+        if value < 0:
+            return {"status": "error", "message": "Risk ATR threshold tidak boleh negatif."}
+        state["auto_trade_risk_atr_threshold"] = value
+
+    if payload.risk_balance_fixed_threshold is not None:
+        value = float(payload.risk_balance_fixed_threshold)
+        if value < 0:
+            return {"status": "error", "message": "Risk balance fixed threshold tidak boleh negatif."}
+        state["auto_trade_risk_balance_fixed_threshold"] = value
+
+    if payload.risk_confidence_threshold is not None:
+        value = float(payload.risk_confidence_threshold)
+        if value < 0 or value > 1:
+            return {"status": "error", "message": "Risk confidence threshold harus antara 0 sampai 1."}
+        state["auto_trade_risk_confidence_threshold"] = value
+
+    if payload.risk_spread_fixed_threshold is not None:
+        value = int(payload.risk_spread_fixed_threshold)
+        if value < 0:
+            return {"status": "error", "message": "Risk spread fixed threshold tidak boleh negatif."}
+        state["auto_trade_risk_spread_fixed_threshold"] = value
+
+    if payload.risk_spread_low_threshold is not None:
+        value = int(payload.risk_spread_low_threshold)
+        if value < 0:
+            return {"status": "error", "message": "Risk spread low threshold tidak boleh negatif."}
+        state["auto_trade_risk_spread_low_threshold"] = value
+
+    if payload.risk_hybrid_addon_rr_threshold is not None:
+        value = float(payload.risk_hybrid_addon_rr_threshold)
+        if value < 0.2 or value > 10:
+            return {"status": "error", "message": "Risk hybrid add-on RR threshold harus antara 0.2 sampai 10."}
+        state["auto_trade_risk_hybrid_addon_rr_threshold"] = value
+
+    if payload.risk_hybrid_entry_mode is not None:
+        value = str(payload.risk_hybrid_entry_mode).strip().lower()
+        if value not in ("fixed_lot", "risk_percent", "balance_scaled", "atr_dynamic"):
+            return {"status": "error", "message": "Hybrid entry mode tidak valid."}
+        state["auto_trade_risk_hybrid_entry_mode"] = value
+
+    if payload.risk_hybrid_addon_mode is not None:
+        value = str(payload.risk_hybrid_addon_mode).strip().lower()
+        if value not in ("fixed_lot", "risk_percent", "balance_scaled", "atr_dynamic"):
+            return {"status": "error", "message": "Hybrid add-on mode tidak valid."}
+        state["auto_trade_risk_hybrid_addon_mode"] = value
+
+    if payload.risk_adaptive_window_days is not None:
+        value = int(payload.risk_adaptive_window_days)
+        if value < 7 or value > 3650:
+            return {"status": "error", "message": "Adaptive window days harus antara 7 sampai 3650."}
+        state["auto_trade_risk_adaptive_window_days"] = value
+
+    if payload.risk_adaptive_min_trades is not None:
+        value = int(payload.risk_adaptive_min_trades)
+        if value < 3 or value > 5000:
+            return {"status": "error", "message": "Adaptive min trades harus antara 3 sampai 5000."}
+        state["auto_trade_risk_adaptive_min_trades"] = value
+
     state["auto_trade_symbol"] = _resolve_auto_trade_symbol_for_state(state)
 
     # Keep global state updated as fallback, and persist profile for active broker/account.
@@ -946,6 +1023,17 @@ def set_auto_trade_config(payload: AutoTradeConfigRequest):
         "lot": state.get("lot"),
         "max_open_trades": state.get("max_open_trades"),
         "risk_mode": state.get("auto_trade_risk_mode", "fixed_lot"),
+        "risk_selector_strategy": state.get("auto_trade_risk_selector_strategy", "manual"),
+        "risk_atr_threshold": state.get("auto_trade_risk_atr_threshold", 12.0),
+        "risk_balance_fixed_threshold": state.get("auto_trade_risk_balance_fixed_threshold", 500.0),
+        "risk_confidence_threshold": state.get("auto_trade_risk_confidence_threshold", 0.70),
+        "risk_spread_fixed_threshold": state.get("auto_trade_risk_spread_fixed_threshold", 120),
+        "risk_spread_low_threshold": state.get("auto_trade_risk_spread_low_threshold", 60),
+        "risk_hybrid_addon_rr_threshold": state.get("auto_trade_risk_hybrid_addon_rr_threshold", 2.0),
+        "risk_hybrid_entry_mode": state.get("auto_trade_risk_hybrid_entry_mode", "risk_percent"),
+        "risk_hybrid_addon_mode": state.get("auto_trade_risk_hybrid_addon_mode", "balance_scaled"),
+        "risk_adaptive_window_days": state.get("auto_trade_risk_adaptive_window_days", 90),
+        "risk_adaptive_min_trades": state.get("auto_trade_risk_adaptive_min_trades", 12),
         "risk_percent": state.get("auto_trade_risk_percent", 1.0),
         "use_account_balance": bool(state.get("auto_trade_use_account_balance", True)),
         "use_available_margin": bool(state.get("auto_trade_use_available_margin", True)),
@@ -1015,6 +1103,17 @@ def get_auto_trade_constraints():
             "sl_value": state.get("sl_value"),
             "auto_analytic_tpsl": state.get("auto_analytic_tpsl"),
             "risk_mode": state.get("auto_trade_risk_mode", "fixed_lot"),
+            "risk_selector_strategy": state.get("auto_trade_risk_selector_strategy", "manual"),
+            "risk_atr_threshold": state.get("auto_trade_risk_atr_threshold", 12.0),
+            "risk_balance_fixed_threshold": state.get("auto_trade_risk_balance_fixed_threshold", 500.0),
+            "risk_confidence_threshold": state.get("auto_trade_risk_confidence_threshold", 0.70),
+            "risk_spread_fixed_threshold": state.get("auto_trade_risk_spread_fixed_threshold", 120),
+            "risk_spread_low_threshold": state.get("auto_trade_risk_spread_low_threshold", 60),
+            "risk_hybrid_addon_rr_threshold": state.get("auto_trade_risk_hybrid_addon_rr_threshold", 2.0),
+            "risk_hybrid_entry_mode": state.get("auto_trade_risk_hybrid_entry_mode", "risk_percent"),
+            "risk_hybrid_addon_mode": state.get("auto_trade_risk_hybrid_addon_mode", "balance_scaled"),
+            "risk_adaptive_window_days": state.get("auto_trade_risk_adaptive_window_days", 90),
+            "risk_adaptive_min_trades": state.get("auto_trade_risk_adaptive_min_trades", 12),
             "risk_percent": state.get("auto_trade_risk_percent", 1.0),
             "use_account_balance": bool(state.get("auto_trade_use_account_balance", True)),
             "use_available_margin": bool(state.get("auto_trade_use_available_margin", True)),
