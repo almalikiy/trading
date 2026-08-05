@@ -5,6 +5,7 @@ from collections import deque
 from datetime import datetime
 
 from .db import (
+    apply_auto_trade_profile_to_state,
     apply_partial_close_record,
     close_trade_record,
     create_trade_open_record,
@@ -661,6 +662,15 @@ def _run_auto_trade_cycle():
         symbol = str(feed_broker.get("default_symbol")).strip() or "XAUUSD"
     elif state.get("auto_trade_symbol"):
         symbol = str(state.get("auto_trade_symbol")).strip() or "XAUUSD"
+
+    # Resolve per-account profile for the currently connected account on active broker.
+    if feed_broker:
+        profile_metrics = get_broker_account_metrics(feed_broker, symbol=symbol, auto_start=False)
+        profile_account_id = profile_metrics.get("account_id") if isinstance(profile_metrics, dict) else None
+        if profile_account_id is not None:
+            state = apply_auto_trade_profile_to_state(state, feed_broker.get("id"), profile_account_id)
+            symbol = str(state.get("auto_trade_symbol") or symbol).strip() or symbol
+
     auto_open_broker, _ = _resolve_auto_open_broker(state, symbol)
 
     keep_alive = bool(state.get("keep_terminal_alive", True))

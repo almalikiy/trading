@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, Query, Body
-from .db import get_account_state, save_account_state, insert_trade, get_trade_history, get_broker, get_default_broker, get_open_trades_count, list_open_trades, close_trade_record, resolve_feed_broker, update_open_trade_tpsl
+from .db import get_account_state, save_account_state, insert_trade, get_trade_history, get_broker, get_default_broker, get_open_trades_count, list_open_trades, close_trade_record, resolve_feed_broker, update_open_trade_tpsl, apply_auto_trade_profile_to_state, save_auto_trade_profile, has_auto_trade_profile
 router = APIRouter()
 from .logic import log_mt5_error
 from datetime import datetime
@@ -24,12 +24,14 @@ from .terminal_adapters import ensure_terminal_running
 # Endpoint: Get analytic TP/SL state
 @router.get("/account/state")
 def get_account_state_route():
-    state = get_account_state()
+    base_state = get_account_state()
+    state, broker, _, account_id, _ = _apply_profile_for_active_account(base_state)
     synced_symbol = _resolve_auto_trade_symbol_for_state(state)
-    if str(state.get("auto_trade_symbol") or "").strip().upper() != synced_symbol:
-        state["auto_trade_symbol"] = synced_symbol
-        save_account_state(state)
-    state["auto_trade_symbol_scope"] = "broker_default"
+    state["auto_trade_symbol"] = synced_symbol
+    state["auto_trade_symbol_scope"] = "profile_or_broker_default"
+    state["auto_trade_profile_broker_id"] = (broker or {}).get("id")
+    state["auto_trade_profile_account_id"] = account_id
+    state["auto_trade_profile_scope"] = "account" if (broker and account_id is not None and has_auto_trade_profile(broker.get("id"), account_id)) else "global"
     return state
 
 # Endpoint: Set analytic TP/SL value
@@ -275,6 +277,26 @@ def _resolve_auto_trade_broker_for_state(state):
     return get_default_broker()
 
 
+def _resolve_active_profile_context(state):
+    broker = _resolve_auto_trade_broker_for_state(state)
+    symbol = _resolve_auto_trade_symbol_for_state(state)
+    account_id = None
+    metrics = {}
+    if broker:
+        metrics = get_broker_account_metrics(broker, symbol=symbol, auto_start=False) or {}
+        account_id = metrics.get("account_id")
+    return broker, symbol, account_id, metrics
+
+
+def _apply_profile_for_active_account(state):
+    broker, symbol, account_id, metrics = _resolve_active_profile_context(state)
+    if broker and account_id is not None:
+        effective = apply_auto_trade_profile_to_state(state, broker.get("id"), account_id)
+    else:
+        effective = dict(state)
+    return effective, broker, symbol, account_id, metrics
+
+
 def _sync_terminal_trade_views():
     global _LAST_TERMINAL_SYNC_TS
     now = time.time()
@@ -348,7 +370,8 @@ def _decorate_open_positions_with_strategy_state(open_rows, history_rows, accoun
 
 @router.get("/account/auto_trade_health")
 def get_auto_trade_health():
-    state = get_account_state()
+    base_state = get_account_state()
+    state, active_broker, _, active_account_id, _ = _apply_profile_for_active_account(base_state)
     checks = []
     blockers = []
 
@@ -367,7 +390,7 @@ def get_auto_trade_health():
     if not real_trade_enabled:
         blockers.append("Enable Trading on MT5 masih OFF.")
 
-    feed_broker = resolve_feed_broker(state=state, require_terminal_path=False) or get_default_broker()
+    feed_broker = active_broker or resolve_feed_broker(state=state, require_terminal_path=False) or get_default_broker()
     has_broker = feed_broker is not None
     checks.append({"key": "feed_broker", "ok": has_broker, "value": (feed_broker or {}).get("name"), "message": "Data feed broker tersedia"})
     if not has_broker:
@@ -438,6 +461,11 @@ def get_auto_trade_health():
         "checks": checks,
         "symbol": symbol,
         "feed_broker": feed_broker,
+        "profile": {
+            "broker_id": (feed_broker or {}).get("id"),
+            "account_id": active_account_id,
+            "scope": "account" if (feed_broker and active_account_id is not None and has_auto_trade_profile(feed_broker.get("id"), active_account_id)) else "global",
+        },
     }
 
 
@@ -665,7 +693,8 @@ def set_trade_history_sync(payload: TradeHistorySyncSettingsRequest):
 
 @router.post("/account/set_auto_trade_config")
 def set_auto_trade_config(payload: AutoTradeConfigRequest):
-    state = get_account_state()
+    base_state = get_account_state()
+    state, broker_ctx, _, account_id_ctx, _ = _apply_profile_for_active_account(base_state)
 
     # Auto-trade symbol selalu mengikuti default symbol broker aktif.
     if payload.symbol is not None:
@@ -881,7 +910,10 @@ def set_auto_trade_config(payload: AutoTradeConfigRequest):
 
     state["auto_trade_symbol"] = _resolve_auto_trade_symbol_for_state(state)
 
+    # Keep global state updated as fallback, and persist profile for active broker/account.
     save_account_state(state)
+    if broker_ctx and account_id_ctx is not None:
+        save_auto_trade_profile(broker_ctx.get("id"), account_id_ctx, state)
 
     broker_for_response = _resolve_auto_trade_broker_for_state(state)
     symbol_for_response = _resolve_auto_trade_symbol_for_state(state)
@@ -934,13 +966,18 @@ def set_auto_trade_config(payload: AutoTradeConfigRequest):
         "stateful_trail_buffer_atr_mult": state.get("auto_trade_stateful_trail_buffer_atr_mult", 0.5),
         "constraints": constraints,
         "account_metrics": account_metrics,
+        "profile": {
+            "broker_id": (broker_for_response or {}).get("id"),
+            "account_id": account_id_ctx,
+            "scope": "account" if (broker_for_response and account_id_ctx is not None) else "global",
+        },
     }
 
 
 @router.get("/account/auto_trade_constraints")
 def get_auto_trade_constraints():
-    state = get_account_state()
-    broker = _resolve_auto_trade_broker_for_state(state)
+    base_state = get_account_state()
+    state, broker, _, account_id, _ = _apply_profile_for_active_account(base_state)
     symbol = _resolve_auto_trade_symbol_for_state(state)
     constraints = get_broker_symbol_constraints(broker, symbol=symbol, auto_start=False)
     account_metrics = get_broker_account_metrics(broker, symbol=symbol, auto_start=False)
@@ -1001,6 +1038,11 @@ def get_auto_trade_constraints():
             "lot": normalized_lot,
         },
         "account_metrics": account_metrics,
+        "profile": {
+            "broker_id": (broker or {}).get("id"),
+            "account_id": account_id,
+            "scope": "account" if (broker and account_id is not None and has_auto_trade_profile(broker.get("id"), account_id)) else "global",
+        },
     }
 
 

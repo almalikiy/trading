@@ -6,6 +6,51 @@ from contextlib import contextmanager
 
 DB_PATH = "trading_data.db"
 
+AUTO_TRADE_PROFILE_KEYS = [
+    "auto_trade_symbol",
+    "auto_trade_interval_sec",
+    "auto_analytic_tpsl",
+    "tp_value",
+    "sl_value",
+    "lot",
+    "max_open_trades",
+    "auto_trade_risk_mode",
+    "auto_trade_risk_percent",
+    "auto_trade_use_account_balance",
+    "auto_trade_use_available_margin",
+    "auto_trade_min_free_margin_pct",
+    "auto_trade_max_margin_usage_pct",
+    "auto_trade_max_spread_points",
+    "auto_trade_min_signal_score",
+    "auto_trade_allow_sell",
+    "auto_trade_cooldown_sec",
+    "auto_trade_session_start_hour",
+    "auto_trade_session_end_hour",
+    "auto_trade_use_atr_tpsl",
+    "auto_trade_atr_period",
+    "auto_trade_atr_sl_mult",
+    "auto_trade_atr_tp_mult",
+    "auto_trade_trailing_enabled",
+    "auto_trade_trailing_activation_rr",
+    "auto_trade_trailing_atr_mult",
+    "auto_trade_confidence_model",
+    "auto_trade_confidence_threshold",
+    "auto_trade_tf_weight_m1",
+    "auto_trade_tf_weight_m5",
+    "auto_trade_tf_weight_m15",
+    "auto_trade_tf_weight_m30",
+    "auto_trade_partial_tp_enabled",
+    "auto_trade_partial_tp_rr1",
+    "auto_trade_partial_tp_close_pct1",
+    "auto_trade_partial_tp_rr2",
+    "auto_trade_partial_tp_close_pct2",
+    "auto_trade_break_even_enabled",
+    "auto_trade_break_even_rr",
+    "auto_trade_break_even_offset_atr_mult",
+    "auto_trade_trailing_mode",
+    "auto_trade_stateful_trail_buffer_atr_mult",
+]
+
 
 @contextmanager
 def get_db():
@@ -226,6 +271,19 @@ def init_db():
                 amount REAL,
                 note TEXT,
                 timestamp INTEGER
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auto_trade_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                broker_id INTEGER NOT NULL,
+                account_id INTEGER NOT NULL,
+                profile_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE (broker_id, account_id)
             )
             """
         )
@@ -1131,6 +1189,74 @@ def get_mt5_error_log(limit=500):
 def clear_mt5_error_log():
     with get_db() as conn:
         conn.execute("DELETE FROM mt5_error_log")
+
+
+def get_auto_trade_profile(broker_id, account_id):
+    if broker_id is None or account_id is None:
+        return None
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT profile_json
+            FROM auto_trade_profiles
+            WHERE broker_id = ? AND account_id = ?
+            LIMIT 1
+            """,
+            (int(broker_id), int(account_id)),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        data = json.loads(row["profile_json"] or "{}")
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def has_auto_trade_profile(broker_id, account_id):
+    if broker_id is None or account_id is None:
+        return False
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM auto_trade_profiles
+            WHERE broker_id = ? AND account_id = ?
+            LIMIT 1
+            """,
+            (int(broker_id), int(account_id)),
+        ).fetchone()
+    return bool(row)
+
+
+def save_auto_trade_profile(broker_id, account_id, profile_dict):
+    if broker_id is None or account_id is None:
+        return False
+    now = int(time.time())
+    payload = {k: profile_dict.get(k) for k in AUTO_TRADE_PROFILE_KEYS if k in profile_dict}
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO auto_trade_profiles (broker_id, account_id, profile_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(broker_id, account_id) DO UPDATE SET
+                profile_json = excluded.profile_json,
+                updated_at = excluded.updated_at
+            """,
+            (int(broker_id), int(account_id), json.dumps(payload, ensure_ascii=True), now, now),
+        )
+    return True
+
+
+def apply_auto_trade_profile_to_state(base_state, broker_id, account_id):
+    state = dict(base_state or {})
+    profile = get_auto_trade_profile(broker_id, account_id)
+    if not profile:
+        return state
+    for key in AUTO_TRADE_PROFILE_KEYS:
+        if key in profile:
+            state[key] = profile[key]
+    return state
 
 
 def _normalize_broker_execution_mode(platform, execution_mode):
