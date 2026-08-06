@@ -16,6 +16,7 @@ from .db import (
     get_recent_closed_trades,
     list_brokers,
     list_open_trades,
+    link_trade_event_reference,
     log_mt5_error,
     log_auto_trade_event,
     resolve_feed_broker,
@@ -935,6 +936,16 @@ def _apply_trailing_policy(state, trade_row, direction, entry, last_price, atr_v
     return None
 
 
+def _resolve_decision_source(reason_text, adaptive_meta):
+    reason = str(reason_text or "").strip().lower()
+    model_type = str((adaptive_meta or {}).get("model_type") or "").strip().lower()
+    if reason == "adaptive_ml_prediction" or model_type in ("random_forest", "majority"):
+        return "ML_adaptive"
+    if reason in ("adaptive_best_history", "adaptive_fallback_manual"):
+        return "Adaptive_history"
+    return "Rule_based"
+
+
 def _last_auto_action_at():
     history = get_trade_history()
     for row in reversed(history):
@@ -1716,6 +1727,7 @@ def _run_auto_trade_cycle():
                 "timestamp": int(time.time()),
                 "event_type": "analysis",
                 "decision": f"risk_mode_recommendation:{effective_risk_mode}",
+                "decision_source": _resolve_decision_source(risk_mode_reason, adaptive_meta),
                 "reason": risk_mode_reason,
                 "broker_id": broker.get("id"),
                 "broker_name": broker.get("name"),
@@ -1735,6 +1747,27 @@ def _run_auto_trade_cycle():
                 "lot_mode": effective_risk_mode,
                 "lot": _coerce_float(state.get("lot"), 0.01),
                 "session_hour": current_hour,
+                "strategy_meta": {
+                    "risk_selector_strategy": risk_selector_strategy,
+                    "manual_mode": state.get("auto_trade_risk_mode"),
+                    "adaptive_meta": adaptive_meta,
+                },
+                "constraints": {
+                    "max_lot": constraints.get("volume_max") if isinstance(constraints, dict) else None,
+                    "min_lot": constraints.get("volume_min") if isinstance(constraints, dict) else None,
+                    "max_transactions": state.get("max_open_trades"),
+                    "tp_value": state.get("tp_value"),
+                    "sl_value": state.get("sl_value"),
+                    "min_free_margin_pct": state.get("auto_trade_min_free_margin_pct"),
+                    "max_margin_usage_pct": state.get("auto_trade_max_margin_usage_pct"),
+                },
+                "signal_snapshot": {
+                    "atr": atr_value,
+                    "spread_points": spread_points if spread_points >= 0 else None,
+                    "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+                    "confidence": _coerce_float(signal_scoring.get("score"), 0.0),
+                    "session_time": current_hour,
+                },
                 "payload": {
                     "risk_selector_strategy": risk_selector_strategy,
                     "manual_mode": state.get("auto_trade_risk_mode"),
@@ -1885,6 +1918,7 @@ def _run_auto_trade_cycle():
             "reason": f"auto_open:{signal_scoring.get('score', 0.0):.3f}",
             "tpValue": tp_value,
             "slValue": sl_value,
+            "tp_sl_mode": str(state.get("auto_trade_protective_mode", "broker_sl") or "broker_sl"),
             "broker_id": broker.get("id"),
             "broker_name": broker.get("name"),
             "account_id": (metrics or {}).get("account_id"),
@@ -1940,11 +1974,13 @@ def _run_auto_trade_cycle():
             },
             result={"status": "open", "risk_mode": effective_risk_mode},
         )
-        log_auto_trade_event(
+        open_event_id = log_auto_trade_event(
             {
                 "timestamp": now,
                 "event_type": "open_success",
                 "trade_id": trade_id,
+                "decision": f"open:{effective_risk_mode}",
+                "decision_source": _resolve_decision_source(risk_mode_reason, adaptive_meta),
                 "broker_id": broker.get("id"),
                 "broker_name": broker.get("name"),
                 "account_id": (metrics or {}).get("account_id"),
@@ -1963,6 +1999,30 @@ def _run_auto_trade_cycle():
                 "lot_mode": effective_risk_mode,
                 "lot": lot_to_open,
                 "session_hour": current_hour,
+                "strategy_meta": {
+                    "risk_selector_strategy": risk_selector_strategy,
+                    "risk_mode_reason": risk_mode_reason,
+                    "manual_mode": state.get("auto_trade_risk_mode"),
+                    "adaptive_meta": adaptive_meta,
+                    "hedge_enabled": bool(state.get("hedge_enabled", True)),
+                },
+                "constraints": {
+                    "max_lot": constraints.get("volume_max") if isinstance(constraints, dict) else None,
+                    "min_lot": constraints.get("volume_min") if isinstance(constraints, dict) else None,
+                    "max_transactions": state.get("max_open_trades"),
+                    "tp_value": tp_value,
+                    "sl_value": sl_value,
+                    "min_free_margin_pct": state.get("auto_trade_min_free_margin_pct"),
+                    "max_margin_usage_pct": state.get("auto_trade_max_margin_usage_pct"),
+                    "tp_sl_mode": state.get("auto_trade_protective_mode", "broker_sl"),
+                },
+                "signal_snapshot": {
+                    "atr": atr_value,
+                    "spread_points": spread_points if spread_points >= 0 else None,
+                    "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+                    "confidence": _coerce_float(signal_scoring.get("score"), 0.0),
+                    "session_time": current_hour,
+                },
                 "payload": {
                     "risk_selector_strategy": risk_selector_strategy,
                     "risk_mode_reason": risk_mode_reason,
@@ -1972,6 +2032,7 @@ def _run_auto_trade_cycle():
                 },
             }
         )
+        link_trade_event_reference(trade_id, open_event_id, event_role="open")
         _diag_open_attempt(
             "ok",
             broker_name=broker.get("name"),
@@ -2140,6 +2201,65 @@ def _run_auto_trade_cycle():
                 symbol=t.get("symbol") or symbol,
                 ticket=ticket,
             )
+            adaptive_factor = _coerce_float(target_snapshot.get("adaptive_factor"), 1.0)
+            close_spread_points = _coerce_int((tick_snapshot or {}).get("spread_points"), -1)
+            close_event_id = log_auto_trade_event(
+                {
+                    "timestamp": int(time.time()),
+                    "event_type": "close_success",
+                    "trade_id": t.get("trade_id"),
+                    "decision": f"close:{close_reason or 'auto_close'}",
+                    "decision_source": "Adaptive_history" if abs(adaptive_factor - 1.0) > 1e-9 else "Rule_based",
+                    "reason": close_reason or "auto_close",
+                    "broker_id": broker.get("id"),
+                    "broker_name": broker.get("name"),
+                    "account_id": t.get("account_id"),
+                    "symbol": t.get("symbol") or symbol,
+                    "signal": signal,
+                    "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+                    "spread_points": close_spread_points if close_spread_points >= 0 else None,
+                    "atr_value": atr_value,
+                    "trailing_mode": t.get("trailing_mode") or state.get("auto_trade_trailing_mode"),
+                    "risk_mode": t.get("risk_mode") or state.get("auto_trade_risk_mode"),
+                    "lot_mode": t.get("risk_mode") or state.get("auto_trade_risk_mode"),
+                    "lot": _coerce_float(t.get("lot"), 0.0),
+                    "session_hour": current_hour,
+                    "strategy_meta": {
+                        "risk_mode": t.get("risk_mode"),
+                        "trailing_mode": t.get("trailing_mode"),
+                        "target_factor": target_snapshot.get("adaptive_factor"),
+                        "target_hit": bool(trade_runtime.get("target_hit", False)),
+                    },
+                    "constraints": {
+                        "tp_value": t.get("tpValue"),
+                        "sl_value": t.get("slValue"),
+                        "tp_sl_mode": t.get("tp_sl_mode") or state.get("auto_trade_protective_mode", "broker_sl"),
+                        "max_lot": constraints.get("volume_max") if isinstance(constraints, dict) else None,
+                        "min_lot": constraints.get("volume_min") if isinstance(constraints, dict) else None,
+                    },
+                    "signal_snapshot": {
+                        "atr": atr_value,
+                        "spread_points": close_spread_points if close_spread_points >= 0 else None,
+                        "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+                        "confidence": _coerce_float(signal_scoring.get("score"), 0.0),
+                        "session_time": current_hour,
+                        "last_price": last_price,
+                        "entry_price": entry,
+                        "target_price": target_snapshot.get("target_price"),
+                    },
+                    "payload": {
+                        "mfe_price_distance": trade_runtime.get("mfe_price_distance"),
+                        "mae_price_distance": trade_runtime.get("mae_price_distance"),
+                        "target_first_crossed_at": trade_runtime.get("target_first_crossed_at"),
+                        "target_plan": {
+                            "effective_tp_value": target_snapshot.get("effective_tp_value"),
+                            "adaptive_factor": target_snapshot.get("adaptive_factor"),
+                            "target_price": target_snapshot.get("target_price"),
+                        },
+                    },
+                }
+            )
+            link_trade_event_reference(t.get("trade_id"), close_event_id, event_role="close")
             _diag_event("action", "auto_close_done", symbol=t.get("symbol") or symbol)
         except Exception as exc:
             _diag_close_attempt(

@@ -101,6 +101,11 @@ export default function TradeHistory() {
   });
   const [tradeSort, setTradeSort] = useState({ key: "entryTime", direction: "desc" });
   const [errorSort, setErrorSort] = useState({ key: "timestamp", direction: "desc" });
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState("");
+  const [selectedTrade, setSelectedTrade] = useState(null);
+  const [tradeDetails, setTradeDetails] = useState(null);
 
   const loadTradeHistory = () =>
     fetch(`${API_BASE}/trade/history`)
@@ -204,6 +209,44 @@ export default function TradeHistory() {
       .finally(() => setForceCloseLoading(false));
   };
 
+  const formatValue = (value) => {
+    if (value === null || value === undefined || value === "") return "-";
+    if (typeof value === "number") return Number.isFinite(value) ? value : "-";
+    if (typeof value === "object") return JSON.stringify(value, null, 2);
+    return String(value);
+  };
+
+  const openTradeDetails = async (row) => {
+    const identifier = row?.trade_id;
+    if (!identifier) {
+      setSnackbar({ open: true, message: "Trade ID tidak tersedia untuk detail.", severity: "warning" });
+      return;
+    }
+    setSelectedTrade(row);
+    setDetailsOpen(true);
+    setDetailsLoading(true);
+    setDetailsError("");
+    setTradeDetails(null);
+    try {
+      const res = await fetch(`${API_BASE}/trade/${encodeURIComponent(identifier)}/details`);
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload?.detail || "Gagal memuat detail trade");
+      }
+      const data = await res.json();
+      setTradeDetails(data);
+    } catch (err) {
+      setDetailsError(String(err?.message || err));
+    } finally {
+      setDetailsLoading(false);
+    }
+  };
+
+  const tpSlMode = String(selectedTrade?.tp_sl_mode || "").toLowerCase();
+  const tpSlIsAdvisory = tpSlMode === "engine_only" || tpSlMode === "advisory" || tpSlMode === "";
+  const tpSlHasTp = tpSlMode === "broker_tpsl";
+  const tpSlHasSl = tpSlMode === "broker_tpsl" || tpSlMode === "broker_sl";
+
 
   return (
     <Box sx={{ p: 2, maxWidth: 1000, mx: 'auto' }}>
@@ -231,6 +274,68 @@ export default function TradeHistory() {
           <Button onClick={() => { setConfirmDialogOpen(false); handleForceClose(); }} color="error" autoFocus disabled={forceCloseLoading}>
             Yes, Force Close
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={detailsOpen} onClose={() => setDetailsOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>Trade Details</DialogTitle>
+        <DialogContent dividers>
+          {detailsLoading ? (
+            <Box sx={{ display: "flex", justifyContent: "center", py: 3 }}>
+              <CircularProgress size={24} />
+            </Box>
+          ) : detailsError ? (
+            <Alert severity="error">{detailsError}</Alert>
+          ) : tradeDetails ? (
+            <Box sx={{ display: "grid", gap: 2 }}>
+              <Paper variant="outlined" sx={{ p: 1.5 }}>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Core Trade</Typography>
+                <Grid container spacing={1}>
+                  <Grid item xs={12} md={4}><Typography variant="body2">Trade ID: {formatValue(tradeDetails?.trade?.trade_id)}</Typography></Grid>
+                  <Grid item xs={12} md={4}><Typography variant="body2">Type: {formatValue(tradeDetails?.trade?.type)}</Typography></Grid>
+                  <Grid item xs={12} md={4}><Typography variant="body2">Symbol: {formatValue(tradeDetails?.trade?.symbol)}</Typography></Grid>
+                  <Grid item xs={12} md={4}><Typography variant="body2">Entry: {formatValue(tradeDetails?.trade?.entry)}</Typography></Grid>
+                  <Grid item xs={12} md={4}><Typography variant="body2">Exit: {formatValue(tradeDetails?.trade?.exit)}</Typography></Grid>
+                  <Grid item xs={12} md={4}><Typography variant="body2">Profit: {formatValue(tradeDetails?.trade?.profit)}</Typography></Grid>
+                </Grid>
+              </Paper>
+
+              <Paper variant="outlined" sx={{ p: 1.5 }}>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Strategy & Decision</Typography>
+                <Typography variant="body2">Risk Mode: {formatValue(tradeDetails?.strategy?.risk_mode)}</Typography>
+                <Typography variant="body2">Decision: {formatValue(tradeDetails?.strategy?.decision)}</Typography>
+                <Typography variant="body2">Decision Source: {formatValue(tradeDetails?.strategy?.decision_source)}</Typography>
+                <Typography variant="body2" sx={{ mt: 1 }}>Strategy Meta:</Typography>
+                <Box component="pre" sx={{ p: 1, m: 0, bgcolor: "grey.100", borderRadius: 1, fontSize: 12, overflow: "auto" }}>
+                  {formatValue(tradeDetails?.strategy?.strategy_meta || {})}
+                </Box>
+              </Paper>
+
+              <Paper variant="outlined" sx={{ p: 1.5 }}>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Constraints</Typography>
+                <Box component="pre" sx={{ p: 1, m: 0, bgcolor: "grey.100", borderRadius: 1, fontSize: 12, overflow: "auto" }}>
+                  {formatValue(tradeDetails?.constraints || {})}
+                </Box>
+              </Paper>
+
+              <Paper variant="outlined" sx={{ p: 1.5 }}>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Signal Snapshots</Typography>
+                <Typography variant="body2" sx={{ mb: 0.5 }}>Open Snapshot</Typography>
+                <Box component="pre" sx={{ p: 1, m: 0, mb: 1, bgcolor: "grey.100", borderRadius: 1, fontSize: 12, overflow: "auto" }}>
+                  {formatValue(tradeDetails?.signal_snapshots?.open || {})}
+                </Box>
+                <Typography variant="body2" sx={{ mb: 0.5 }}>Close Snapshot</Typography>
+                <Box component="pre" sx={{ p: 1, m: 0, bgcolor: "grey.100", borderRadius: 1, fontSize: 12, overflow: "auto" }}>
+                  {formatValue(tradeDetails?.signal_snapshots?.close || {})}
+                </Box>
+              </Paper>
+            </Box>
+          ) : (
+            <Typography variant="body2" color="text.secondary">No details available.</Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDetailsOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
 
@@ -544,11 +649,17 @@ export default function TradeHistory() {
                     Exec
                   </TableSortLabel>
                 </TableCell>
+                <TableCell>TP/SL Mode</TableCell>
+                <TableCell>Action</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {sortedTradeHistory.map((row, idx) => {
                 const statusChips = parseHistoryStatusChips(row.reason, row.execution_mode);
+                const mode = String(row.tp_sl_mode || "").toLowerCase();
+                const advisory = mode === "engine_only" || mode === "advisory" || mode === "";
+                const hasTp = mode === "broker_tpsl";
+                const hasSl = mode === "broker_tpsl" || mode === "broker_sl";
                 return (
                   <TableRow key={idx}>
                     <TableCell>{idx + 1}</TableCell>
@@ -569,12 +680,33 @@ export default function TradeHistory() {
                     <TableCell>{row.broker_name || '-'}</TableCell>
                     <TableCell>{row.account_id || '-'}</TableCell>
                     <TableCell>{row.execution_mode || '-'}</TableCell>
+                    <TableCell>
+                      <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap", minWidth: 120 }}>
+                        {advisory ? (
+                          <Chip size="small" label="Advisory" color="default" variant="outlined" />
+                        ) : null}
+                        {hasTp ? <Chip size="small" label="TP Active" color="success" variant="outlined" /> : null}
+                        {hasSl ? <Chip size="small" label="SL Active" color="error" variant="outlined" /> : null}
+                      </Box>
+                    </TableCell>
+                    <TableCell>
+                      <Button size="small" variant="outlined" onClick={() => openTradeDetails(row)}>
+                        View Details
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 );
               })}
             </TableBody>
           </Table>
         </TableContainer>
+        {detailsOpen && selectedTrade ? (
+          <Box sx={{ mt: 1, display: "flex", gap: 0.5, flexWrap: "wrap" }}>
+            {tpSlIsAdvisory ? <Chip size="small" label="Mode: Advisory" color="default" variant="outlined" /> : null}
+            {tpSlHasTp ? <Chip size="small" label="Mode: TP Active" color="success" variant="outlined" /> : null}
+            {tpSlHasSl ? <Chip size="small" label="Mode: SL Active" color="error" variant="outlined" /> : null}
+          </Box>
+        ) : null}
         {!loading && filteredTradeHistory.length === 0 ? (
           <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
             Tidak ada trade yang cocok dengan filter.

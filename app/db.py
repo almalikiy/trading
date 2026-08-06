@@ -532,6 +532,10 @@ def init_db():
         )
         _add_column_if_missing(conn, "auto_trade_events", "strategy_name", "TEXT")
         _add_column_if_missing(conn, "auto_trade_events", "strategy_revision", "INTEGER")
+        _add_column_if_missing(conn, "auto_trade_events", "decision_source", "TEXT")
+        _add_column_if_missing(conn, "auto_trade_events", "strategy_meta_json", "TEXT")
+        _add_column_if_missing(conn, "auto_trade_events", "constraints_json", "TEXT")
+        _add_column_if_missing(conn, "auto_trade_events", "signal_snapshot_json", "TEXT")
 
         conn.execute(
             """
@@ -593,6 +597,9 @@ def init_db():
         _add_column_if_missing(conn, "trade_history", "time_to_close_sec", "INTEGER")
         _add_column_if_missing(conn, "trade_history", "target_first_crossed_at", "INTEGER")
         _add_column_if_missing(conn, "trade_history", "time_to_target_cross_sec", "INTEGER")
+        _add_column_if_missing(conn, "trade_history", "open_event_id", "INTEGER")
+        _add_column_if_missing(conn, "trade_history", "close_event_id", "INTEGER")
+        _add_column_if_missing(conn, "trade_history", "tp_sl_mode", "TEXT")
 
         conn.execute(
             """
@@ -1065,9 +1072,10 @@ def append_trade_history(trade):
                 signal_context_json, strategy_name, strategy_revision,
                 target_price, target_factor, target_hit, overshoot_before_close,
                 force_close_after_target_crossed, mfe_price_distance, mae_price_distance,
-                time_to_close_sec, target_first_crossed_at, time_to_target_cross_sec
+                time_to_close_sec, target_first_crossed_at, time_to_target_cross_sec,
+                tp_sl_mode
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade.get("trade_id"),
@@ -1112,6 +1120,7 @@ def append_trade_history(trade):
                 trade.get("time_to_close_sec"),
                 trade.get("target_first_crossed_at"),
                 trade.get("time_to_target_cross_sec"),
+                trade.get("tp_sl_mode"),
             ),
         )
 
@@ -1130,7 +1139,7 @@ def get_trade_history():
                                          target_price, target_factor, target_hit, overshoot_before_close,
                                          force_close_after_target_crossed, mfe_price_distance,
                                          mae_price_distance, time_to_close_sec, target_first_crossed_at,
-                                         time_to_target_cross_sec
+                                         time_to_target_cross_sec, tp_sl_mode
             FROM trade_history
             ORDER BY entryTime ASC, id ASC
             """
@@ -1179,6 +1188,7 @@ def get_trade_history():
                 "time_to_close_sec": row["time_to_close_sec"],
                 "target_first_crossed_at": row["target_first_crossed_at"],
                 "time_to_target_cross_sec": row["time_to_target_cross_sec"],
+                "tp_sl_mode": row["tp_sl_mode"],
             }
             for row in rows
         ]
@@ -1198,9 +1208,10 @@ def create_trade_open_record(trade):
                 signal_context_json, strategy_name, strategy_revision,
                 target_price, target_factor, target_hit, overshoot_before_close,
                 force_close_after_target_crossed, mfe_price_distance, mae_price_distance,
-                time_to_close_sec, target_first_crossed_at, time_to_target_cross_sec
+                time_to_close_sec, target_first_crossed_at, time_to_target_cross_sec,
+                tp_sl_mode
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade.get("trade_id"),
@@ -1245,6 +1256,7 @@ def create_trade_open_record(trade):
                 trade.get("time_to_close_sec"),
                 trade.get("target_first_crossed_at"),
                 trade.get("time_to_target_cross_sec"),
+                trade.get("tp_sl_mode"),
             ),
         )
 
@@ -1354,7 +1366,8 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                     mae_price_distance = CASE WHEN ? IS NULL THEN mae_price_distance ELSE ? END,
                     time_to_close_sec = CASE WHEN ? IS NULL THEN time_to_close_sec ELSE ? END,
                     target_first_crossed_at = CASE WHEN ? IS NULL THEN target_first_crossed_at ELSE ? END,
-                    time_to_target_cross_sec = CASE WHEN ? IS NULL THEN time_to_target_cross_sec ELSE ? END
+                    time_to_target_cross_sec = CASE WHEN ? IS NULL THEN time_to_target_cross_sec ELSE ? END,
+                    tp_sl_mode = COALESCE(?, tp_sl_mode)
                 WHERE id = ?
                 """,
                 (
@@ -1422,6 +1435,7 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                     trade.get("target_first_crossed_at"),
                     trade.get("time_to_target_cross_sec"),
                     trade.get("time_to_target_cross_sec"),
+                    trade.get("tp_sl_mode"),
                     row["id"],
                 ),
             )
@@ -1439,9 +1453,10 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                 signal_context_json, strategy_name, strategy_revision,
                 target_price, target_factor, target_hit, overshoot_before_close,
                 force_close_after_target_crossed, mfe_price_distance, mae_price_distance,
-                time_to_close_sec, target_first_crossed_at, time_to_target_cross_sec
+                time_to_close_sec, target_first_crossed_at, time_to_target_cross_sec,
+                tp_sl_mode
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade_id,
@@ -1486,6 +1501,7 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                 trade.get("time_to_close_sec"),
                 trade.get("target_first_crossed_at"),
                 trade.get("time_to_target_cross_sec"),
+                trade.get("tp_sl_mode"),
             ),
         )
         return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
@@ -1986,19 +2002,25 @@ def get_auto_trade_profile_history(broker_id=None, account_id=None, limit=200):
 
 def log_auto_trade_event(event):
     if not event:
-        return False
+        return None
     payload = dict(event or {})
+    nested_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+    strategy_meta = payload.get("strategy_meta") if isinstance(payload.get("strategy_meta"), dict) else nested_payload.get("strategy_meta") if isinstance(nested_payload.get("strategy_meta"), dict) else {}
+    constraints = payload.get("constraints") if isinstance(payload.get("constraints"), dict) else nested_payload.get("constraints") if isinstance(nested_payload.get("constraints"), dict) else {}
+    signal_snapshot = payload.get("signal_snapshot") if isinstance(payload.get("signal_snapshot"), dict) else nested_payload.get("signal_snapshot") if isinstance(nested_payload.get("signal_snapshot"), dict) else {}
     with get_db() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
             INSERT INTO auto_trade_events (
                 timestamp, broker_id, broker_name, account_id, symbol, trade_id,
                 event_type, decision, reason, signal, signal_score,
                 spread_points, max_spread_points, margin_free, equity, balance,
                 margin_usage_pct, atr_value, trailing_mode, risk_mode, lot_mode,
-                lot, profit, rr, session_hour, payload_json
+                lot, profit, rr, session_hour, decision_source,
+                strategy_meta_json, constraints_json, signal_snapshot_json,
+                payload_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(payload.get("timestamp") or time.time()),
@@ -2026,10 +2048,14 @@ def log_auto_trade_event(event):
                 payload.get("profit"),
                 payload.get("rr"),
                 payload.get("session_hour"),
+                payload.get("decision_source"),
+                json.dumps(strategy_meta, ensure_ascii=True, default=str),
+                json.dumps(constraints, ensure_ascii=True, default=str),
+                json.dumps(signal_snapshot, ensure_ascii=True, default=str),
                 json.dumps(payload.get("payload") or {}, ensure_ascii=True, default=str),
             ),
         )
-    return True
+        return int(cur.lastrowid)
 
 
 def get_auto_trade_events(limit=1000, broker_id=None, account_id=None, event_type=None, since=None):
@@ -2055,7 +2081,9 @@ def get_auto_trade_events(limit=1000, broker_id=None, account_id=None, event_typ
                    event_type, decision, reason, signal, signal_score,
                    spread_points, max_spread_points, margin_free, equity, balance,
                    margin_usage_pct, atr_value, trailing_mode, risk_mode, lot_mode,
-                   lot, profit, rr, session_hour, payload_json
+                   lot, profit, rr, session_hour, decision_source,
+                   strategy_meta_json, constraints_json, signal_snapshot_json,
+                   payload_json
             FROM auto_trade_events
             {where_sql}
             ORDER BY timestamp DESC, id DESC
@@ -2069,6 +2097,18 @@ def get_auto_trade_events(limit=1000, broker_id=None, account_id=None, event_typ
             payload = json.loads(row["payload_json"] or "{}")
         except Exception:
             payload = {}
+        try:
+            strategy_meta = json.loads(row["strategy_meta_json"] or "{}")
+        except Exception:
+            strategy_meta = {}
+        try:
+            constraints = json.loads(row["constraints_json"] or "{}")
+        except Exception:
+            constraints = {}
+        try:
+            signal_snapshot = json.loads(row["signal_snapshot_json"] or "{}")
+        except Exception:
+            signal_snapshot = {}
         result.append(
             {
                 "timestamp": row["timestamp"],
@@ -2096,10 +2136,175 @@ def get_auto_trade_events(limit=1000, broker_id=None, account_id=None, event_typ
                 "profit": row["profit"],
                 "rr": row["rr"],
                 "session_hour": row["session_hour"],
+                "decision_source": row["decision_source"],
+                "strategy_meta": strategy_meta if isinstance(strategy_meta, dict) else {},
+                "constraints": constraints if isinstance(constraints, dict) else {},
+                "signal_snapshot": signal_snapshot if isinstance(signal_snapshot, dict) else {},
                 "payload": payload if isinstance(payload, dict) else {},
             }
         )
     return result
+
+
+def link_trade_event_reference(trade_id, event_id, event_role="open"):
+    if not trade_id or event_id is None:
+        return False
+    role = str(event_role or "open").strip().lower()
+    with get_db() as conn:
+        if role == "close":
+            cur = conn.execute(
+                """
+                UPDATE trade_history
+                SET close_event_id = ?
+                WHERE id = (
+                    SELECT id FROM trade_history
+                    WHERE trade_id = ? AND status = 'closed'
+                    ORDER BY id DESC
+                    LIMIT 1
+                )
+                """,
+                (int(event_id), str(trade_id)),
+            )
+            return cur.rowcount > 0
+        cur = conn.execute(
+            """
+            UPDATE trade_history
+            SET open_event_id = ?
+            WHERE id = (
+                SELECT id FROM trade_history
+                WHERE trade_id = ? AND status = 'open'
+                ORDER BY id DESC
+                LIMIT 1
+            )
+            """,
+            (int(event_id), str(trade_id)),
+        )
+        return cur.rowcount > 0
+
+
+def get_trade_details(trade_identifier):
+    with get_db() as conn:
+        row = None
+        raw_id = str(trade_identifier or "").strip()
+        if raw_id:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM trade_history
+                WHERE trade_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (raw_id,),
+            ).fetchone()
+            if row is None:
+                try:
+                    numeric_id = int(raw_id)
+                except Exception:
+                    numeric_id = None
+                if numeric_id is not None:
+                    row = conn.execute(
+                        """
+                        SELECT *
+                        FROM trade_history
+                        WHERE id = ?
+                        LIMIT 1
+                        """,
+                        (numeric_id,),
+                    ).fetchone()
+        if row is None:
+            return None
+
+        trade = dict(row)
+
+        open_event = None
+        close_event = None
+        if trade.get("open_event_id"):
+            open_event = conn.execute("SELECT * FROM auto_trade_events WHERE id = ? LIMIT 1", (int(trade.get("open_event_id")),)).fetchone()
+        if trade.get("close_event_id"):
+            close_event = conn.execute("SELECT * FROM auto_trade_events WHERE id = ? LIMIT 1", (int(trade.get("close_event_id")),)).fetchone()
+
+        if open_event is None:
+            open_event = conn.execute(
+                """
+                SELECT * FROM auto_trade_events
+                WHERE trade_id = ? AND event_type = 'open_success'
+                ORDER BY timestamp DESC, id DESC
+                LIMIT 1
+                """,
+                (trade.get("trade_id"),),
+            ).fetchone()
+        if close_event is None:
+            close_event = conn.execute(
+                """
+                SELECT * FROM auto_trade_events
+                WHERE trade_id = ? AND event_type IN ('close_success', 'auto_close_done')
+                ORDER BY timestamp DESC, id DESC
+                LIMIT 1
+                """,
+                (trade.get("trade_id"),),
+            ).fetchone()
+
+    def _event_payload(event_row):
+        if not event_row:
+            return None
+        data = dict(event_row)
+        return {
+            "id": data.get("id"),
+            "timestamp": data.get("timestamp"),
+            "event_type": data.get("event_type"),
+            "decision": data.get("decision"),
+            "decision_source": data.get("decision_source"),
+            "reason": data.get("reason"),
+            "risk_mode": data.get("risk_mode"),
+            "trailing_mode": data.get("trailing_mode"),
+            "strategy_meta": _safe_json_loads(data.get("strategy_meta_json")) or {},
+            "constraints": _safe_json_loads(data.get("constraints_json")) or {},
+            "signal_snapshot": _safe_json_loads(data.get("signal_snapshot_json")) or {},
+            "payload": _safe_json_loads(data.get("payload_json")) or {},
+        }
+
+    open_data = _event_payload(open_event)
+    close_data = _event_payload(close_event)
+
+    return {
+        "trade": {
+            "id": trade.get("id"),
+            "trade_id": trade.get("trade_id"),
+            "status": trade.get("status"),
+            "type": trade.get("type"),
+            "symbol": trade.get("symbol"),
+            "lot": trade.get("lot"),
+            "entry": trade.get("entry"),
+            "exit": trade.get("exit"),
+            "profit": trade.get("profit"),
+            "entryTime": trade.get("entryTime"),
+            "exitTime": trade.get("exitTime"),
+            "reason": trade.get("reason"),
+            "tpValue": trade.get("tpValue"),
+            "slValue": trade.get("slValue"),
+            "tp_sl_mode": trade.get("tp_sl_mode"),
+            "open_event_id": trade.get("open_event_id"),
+            "close_event_id": trade.get("close_event_id"),
+        },
+        "strategy": {
+            "risk_mode": trade.get("risk_mode"),
+            "trailing_mode": trade.get("trailing_mode"),
+            "execution_mode": trade.get("execution_mode"),
+            "decision": (open_data or {}).get("decision"),
+            "decision_source": (open_data or {}).get("decision_source"),
+            "strategy_meta": (open_data or {}).get("strategy_meta") or {},
+        },
+        "constraints": (open_data or {}).get("constraints") or {},
+        "signal_snapshots": {
+            "open": (open_data or {}).get("signal_snapshot") or {},
+            "close": (close_data or {}).get("signal_snapshot") or {},
+        },
+        "events": {
+            "open": open_data,
+            "close": close_data,
+        },
+    }
 
 
 def _trade_rr(row):

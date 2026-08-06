@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Request, Query, Body
+from fastapi import APIRouter, Request, Query, Body, HTTPException
 from fastapi.responses import FileResponse
-from .db import get_account_state, save_account_state, insert_trade, get_trade_history, get_broker, get_default_broker, get_open_trades_count, list_open_trades, close_trade_record, resolve_feed_broker, update_open_trade_tpsl, apply_auto_trade_profile_to_state, save_auto_trade_profile, has_auto_trade_profile, get_auto_trade_statistics, get_auto_trade_profile_history, get_auto_trade_events
+from .db import get_account_state, save_account_state, insert_trade, get_trade_history, get_broker, get_default_broker, get_open_trades_count, list_open_trades, close_trade_record, resolve_feed_broker, update_open_trade_tpsl, apply_auto_trade_profile_to_state, save_auto_trade_profile, has_auto_trade_profile, get_auto_trade_statistics, get_auto_trade_profile_history, get_auto_trade_events, get_trade_details
 router = APIRouter()
 from .logic import log_mt5_error
 from datetime import datetime
@@ -1485,6 +1485,14 @@ def save_open_trade(user_id: str = Query(...), open_trade: dict = Body(...)):
 def get_trade_history_endpoint():
     _sync_terminal_trade_views()
     return load_trade_history()
+
+
+@router.get("/trade/{trade_identifier}/details")
+def get_trade_details_endpoint(trade_identifier: str):
+    details = get_trade_details(trade_identifier)
+    if not details:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    return details
 
 
 @router.get("/trade/open_count")

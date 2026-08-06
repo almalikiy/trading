@@ -387,3 +387,77 @@ def test_trade_history_signal_context_and_recent_closed(tmp_path):
     assert stats["anomaly_audit"]["count"] == 1
     assert stats["anomaly_audit"]["rows"][0]["trade_id"] == "ctx-open-1"
     assert stats["anomaly_audit"]["rows"][0]["reason"] == "stop_loss"
+
+
+def test_trade_details_returns_strategy_constraints_and_snapshots(tmp_path):
+    db.DB_PATH = str(tmp_path / "test.db")
+    db.init_db()
+
+    db.create_trade_open_record(
+        {
+            "trade_id": "detail-1",
+            "type": "BUY",
+            "symbol": "XAUUSD",
+            "lot": 0.1,
+            "ticket": 991,
+            "entry": 2301.0,
+            "entryTime": 1725200000,
+            "reason": "auto_open:0.710",
+            "tpValue": 20.0,
+            "slValue": 10.0,
+            "tp_sl_mode": "broker_tpsl",
+            "broker_id": 1,
+            "broker_name": "Default Broker",
+            "account_id": 778899,
+            "platform": "mt5",
+            "execution_mode": "direct",
+            "terminal_path": "C:/Terminal/terminal64.exe",
+            "trailing_mode": "stateful_hl",
+            "risk_mode": "atr_dynamic",
+            "signal_score": 0.71,
+            "signal_context": {"score": 0.71},
+        }
+    )
+
+    open_event_id = db.log_auto_trade_event(
+        {
+            "timestamp": 1725200000,
+            "event_type": "open_success",
+            "trade_id": "detail-1",
+            "decision": "open:atr_dynamic",
+            "decision_source": "ML_adaptive",
+            "strategy_meta": {"risk_selector_strategy": "adaptive_ml"},
+            "constraints": {"tp_value": 20.0, "sl_value": 10.0, "tp_sl_mode": "broker_tpsl"},
+            "signal_snapshot": {"atr": 11.2, "signal_score": 0.71},
+        }
+    )
+    assert isinstance(open_event_id, int)
+    assert db.link_trade_event_reference("detail-1", open_event_id, "open") is True
+
+    db.close_trade_record("detail-1", exit_price=2318.0, profit=42.0, exit_time=1725201200, ticket=991, reason="auto_close_tp")
+
+    close_event_id = db.log_auto_trade_event(
+        {
+            "timestamp": 1725201200,
+            "event_type": "close_success",
+            "trade_id": "detail-1",
+            "decision": "close:auto_close_tp",
+            "decision_source": "Adaptive_history",
+            "signal_snapshot": {"atr": 10.8, "signal_score": 0.66, "last_price": 2318.0},
+        }
+    )
+    assert isinstance(close_event_id, int)
+    assert db.link_trade_event_reference("detail-1", close_event_id, "close") is True
+
+    details = db.get_trade_details("detail-1")
+    assert details is not None
+    assert details["trade"]["trade_id"] == "detail-1"
+    assert details["trade"]["tp_sl_mode"] == "broker_tpsl"
+    assert details["strategy"]["decision_source"] == "ML_adaptive"
+    assert details["constraints"]["tp_sl_mode"] == "broker_tpsl"
+    assert details["signal_snapshots"]["open"]["signal_score"] == 0.71
+    assert details["signal_snapshots"]["close"]["last_price"] == 2318.0
+
+    history = db.get_trade_history()
+    row = next(item for item in history if item.get("trade_id") == "detail-1")
+    assert row["tp_sl_mode"] == "broker_tpsl"
