@@ -22,6 +22,25 @@ import {
 
 const API_BASE = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 const BROKERS_CACHE_KEY = "dashboard_brokers_cache_v1";
+const DEFAULT_MULTI_TFS = ["M1", "M5", "M15", "M30"];
+
+
+function parseMultiTimeframes(value) {
+  const source = Array.isArray(value)
+    ? value
+    : String(value || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+  const allowed = new Set(["M1", "M5", "M15", "M30", "H1", "H4", "D1"]);
+  const unique = [];
+  for (const item of source) {
+    const tf = String(item || "").trim().toUpperCase();
+    if (!allowed.has(tf) || unique.includes(tf)) continue;
+    unique.push(tf);
+  }
+  return unique.length >= 2 ? unique : [...DEFAULT_MULTI_TFS];
+}
 
 
 export default function AccountMonitor() {
@@ -96,6 +115,7 @@ export default function AccountMonitor() {
   const [autoTradeTrailingAtrMult, setAutoTradeTrailingAtrMult] = useState(1.0);
   const [autoTradeConfidenceModel, setAutoTradeConfidenceModel] = useState("weighted");
   const [autoTradeConfidenceThreshold, setAutoTradeConfidenceThreshold] = useState(0.6);
+  const [autoTradeTimeframes, setAutoTradeTimeframes] = useState(DEFAULT_MULTI_TFS);
   const [autoTradeTfWeightM1, setAutoTradeTfWeightM1] = useState(0.35);
   const [autoTradeTfWeightM5, setAutoTradeTfWeightM5] = useState(0.30);
   const [autoTradeTfWeightM15, setAutoTradeTfWeightM15] = useState(0.20);
@@ -187,6 +207,7 @@ export default function AccountMonitor() {
         setAutoTradeTrailingAtrMult(Number(data.auto_trade_trailing_atr_mult ?? 1.0));
         setAutoTradeConfidenceModel(String(data.auto_trade_confidence_model || "weighted"));
         setAutoTradeConfidenceThreshold(Number(data.auto_trade_confidence_threshold ?? 0.6));
+        setAutoTradeTimeframes(parseMultiTimeframes(data.timeframes || data.auto_trade_timeframes));
         setAutoTradeTfWeightM1(Number(data.auto_trade_tf_weight_m1 ?? 0.35));
         setAutoTradeTfWeightM5(Number(data.auto_trade_tf_weight_m5 ?? 0.30));
         setAutoTradeTfWeightM15(Number(data.auto_trade_tf_weight_m15 ?? 0.20));
@@ -393,6 +414,7 @@ export default function AccountMonitor() {
     setAutoTradeTrailingAtrMult(Number(data.auto_trade_trailing_atr_mult ?? 1.0));
     setAutoTradeConfidenceModel(String(data.auto_trade_confidence_model || "weighted"));
     setAutoTradeConfidenceThreshold(Number(data.auto_trade_confidence_threshold ?? 0.6));
+    setAutoTradeTimeframes(parseMultiTimeframes(data.timeframes || data.auto_trade_timeframes));
     setAutoTradeTfWeightM1(Number(data.auto_trade_tf_weight_m1 ?? 0.35));
     setAutoTradeTfWeightM5(Number(data.auto_trade_tf_weight_m5 ?? 0.30));
     setAutoTradeTfWeightM15(Number(data.auto_trade_tf_weight_m15 ?? 0.20));
@@ -453,6 +475,9 @@ export default function AccountMonitor() {
       if (Object.prototype.hasOwnProperty.call(currentSettings, "hedge_slots")) {
         const value = Number(currentSettings.hedge_slots);
         if (Number.isFinite(value)) setAutoTradeHedgeSlots(value);
+      }
+      if (Object.prototype.hasOwnProperty.call(currentSettings, "timeframes")) {
+        setAutoTradeTimeframes(parseMultiTimeframes(currentSettings.timeframes));
       }
       if (data?.symbol) {
         setAutoTradeSymbol(String(data.symbol));
@@ -526,6 +551,7 @@ export default function AccountMonitor() {
           trailing_atr_mult: Number(autoTradeTrailingAtrMult || 1),
           confidence_model: autoTradeConfidenceModel,
           confidence_threshold: Number(autoTradeConfidenceThreshold || 0.6),
+          timeframes: parseMultiTimeframes(autoTradeTimeframes),
           tf_weight_m1: Number(autoTradeTfWeightM1 || 0),
           tf_weight_m5: Number(autoTradeTfWeightM5 || 0),
           tf_weight_m15: Number(autoTradeTfWeightM15 || 0),
@@ -1378,6 +1404,16 @@ const setDefaultBroker = async (id) => {
                 value={autoTradeConfidenceThreshold}
                 onChange={(e) => setAutoTradeConfidenceThreshold(Number(e.target.value))}
                 inputProps={{ min: 0, max: 0.95, step: 0.01 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Indicator Timeframes"
+                value={autoTradeTimeframes.join(",")}
+                onChange={(e) => setAutoTradeTimeframes(parseMultiTimeframes(e.target.value))}
+                helperText="Pisahkan dengan koma. Minimal 2 TF. Contoh: M1,M5,M15,M30"
               />
             </Grid>
             <Grid item xs={12} md={3}>

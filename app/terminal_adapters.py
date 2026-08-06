@@ -732,6 +732,88 @@ def get_broker_account_metrics(broker, symbol: str = "XAUUSD", auto_start: bool 
             mt5.shutdown()
 
 
+def get_broker_symbol_tick(broker, symbol: str = "XAUUSD", auto_start: bool = True):
+    broker = broker or {}
+    platform = str(broker.get("platform", "mt5")).lower()
+    terminal_path = broker.get("terminal_path")
+    symbol = str(symbol or "XAUUSD").strip().upper() or "XAUUSD"
+
+    payload = {
+        "broker_id": broker.get("id"),
+        "broker_name": broker.get("name"),
+        "platform": platform,
+        "symbol": symbol,
+        "ready": False,
+        "reason": "unknown",
+        "bid": None,
+        "ask": None,
+        "last": None,
+        "point": None,
+        "time": None,
+        "close_buy_price": None,
+        "close_sell_price": None,
+        "mid": None,
+    }
+
+    if platform != "mt5":
+        payload["reason"] = "non_mt5_platform"
+        return payload
+
+    if not terminal_path:
+        payload["reason"] = "terminal_path_missing"
+        return payload
+
+    if auto_start:
+        ensure_terminal_running(terminal_path)
+
+    initialized = False
+    try:
+        initialized = mt5.initialize(path=terminal_path)
+        if not initialized:
+            payload["reason"] = "mt5_initialize_failed"
+            return payload
+
+        info = mt5.symbol_info(symbol)
+        if not info:
+            payload["reason"] = "symbol_not_found"
+            return payload
+        if not bool(getattr(info, "visible", False)):
+            mt5.symbol_select(symbol, True)
+            info = mt5.symbol_info(symbol)
+
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            payload["reason"] = "no_tick_data"
+            return payload
+
+        bid = float(getattr(tick, "bid", 0) or 0)
+        ask = float(getattr(tick, "ask", 0) or 0)
+        last = float(getattr(tick, "last", 0) or 0)
+        point = float(getattr(info, "point", 0) or 0)
+
+        payload.update(
+            {
+                "ready": True,
+                "reason": "ready",
+                "bid": bid if bid > 0 else None,
+                "ask": ask if ask > 0 else None,
+                "last": last if last > 0 else None,
+                "point": point if point > 0 else None,
+                "time": int(getattr(tick, "time", 0) or 0) or None,
+                "close_buy_price": bid if bid > 0 else None,
+                "close_sell_price": ask if ask > 0 else None,
+                "mid": ((bid + ask) / 2.0) if bid > 0 and ask > 0 else None,
+            }
+        )
+        return payload
+    except Exception as exc:
+        payload["reason"] = f"tick_failed: {exc}"
+        return payload
+    finally:
+        if initialized:
+            mt5.shutdown()
+
+
 def _mt5_account_id(account):
     login = getattr(account, "login", None) if account else None
     return int(login) if login is not None else None

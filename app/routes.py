@@ -82,6 +82,7 @@ class AutoTradeConfigRequest(BaseModel):
     trailing_atr_mult: float | None = None
     confidence_model: str | None = None
     confidence_threshold: float | None = None
+    timeframes: list[str] | None = None
     tf_weight_m1: float | None = None
     tf_weight_m5: float | None = None
     tf_weight_m15: float | None = None
@@ -264,7 +265,7 @@ def mt5_error_log_clear():
     return {"status": "ok"}
 
 
-from .logic import analyze_symbol, get_signal_snapshot, get_ohlcv_snapshot
+from .logic import analyze_symbol, get_signal_snapshot, get_ohlcv_snapshot, normalize_timeframes
 from .auto_trader import is_auto_trader_thread_started, get_auto_trader_runtime_status
 
 _SYNC_LOCK = threading.Lock()
@@ -464,7 +465,8 @@ def get_auto_trade_health():
 
     atr_period = int(state.get("auto_trade_atr_period", 14) or 14)
     terminal_path = (feed_broker or {}).get("terminal_path") if feed_broker else None
-    signal_payload = analyze_symbol(symbol, mode="real", terminal_path=terminal_path, atr_period=atr_period)
+    signal_timeframes = normalize_timeframes(str(state.get("auto_trade_timeframes", "M1,M5,M15,M30")).split(","))
+    signal_payload = analyze_symbol(symbol, mode="real", terminal_path=terminal_path, atr_period=atr_period, timeframes=signal_timeframes)
     signal_ok = "error" not in signal_payload
     checks.append({"key": "signal_pipeline", "ok": signal_ok, "value": signal_payload.get("signal") if signal_ok else signal_payload.get("details"), "message": "Pipeline sinyal real-time"})
     if not signal_ok:
@@ -963,6 +965,12 @@ def set_auto_trade_config(payload: AutoTradeConfigRequest):
             return {"status": "error", "message": "Confidence threshold harus antara 0 sampai 0.95."}
         state["auto_trade_confidence_threshold"] = confidence_threshold
 
+    if payload.timeframes is not None:
+        resolved_timeframes = normalize_timeframes(payload.timeframes)
+        if len(resolved_timeframes) < 2:
+            return {"status": "error", "message": "Timeframe indikator harus multi-timeframe (minimal 2 timeframe valid)."}
+        state["auto_trade_timeframes"] = ",".join(resolved_timeframes)
+
     if payload.tf_weight_m1 is not None:
         state["auto_trade_tf_weight_m1"] = max(0.0, float(payload.tf_weight_m1))
     if payload.tf_weight_m5 is not None:
@@ -1163,6 +1171,7 @@ def set_auto_trade_config(payload: AutoTradeConfigRequest):
         "trailing_atr_mult": state.get("auto_trade_trailing_atr_mult", 1.0),
         "confidence_model": state.get("auto_trade_confidence_model", "weighted"),
         "confidence_threshold": state.get("auto_trade_confidence_threshold", 0.6),
+        "timeframes": normalize_timeframes(str(state.get("auto_trade_timeframes", "M1,M5,M15,M30")).split(",")),
         "tf_weight_m1": state.get("auto_trade_tf_weight_m1", 0.35),
         "tf_weight_m5": state.get("auto_trade_tf_weight_m5", 0.30),
         "tf_weight_m15": state.get("auto_trade_tf_weight_m15", 0.20),
@@ -1246,6 +1255,7 @@ def get_auto_trade_constraints():
             "trailing_atr_mult": state.get("auto_trade_trailing_atr_mult", 1.0),
             "confidence_model": state.get("auto_trade_confidence_model", "weighted"),
             "confidence_threshold": state.get("auto_trade_confidence_threshold", 0.6),
+            "timeframes": normalize_timeframes(str(state.get("auto_trade_timeframes", "M1,M5,M15,M30")).split(",")),
             "tf_weight_m1": state.get("auto_trade_tf_weight_m1", 0.35),
             "tf_weight_m5": state.get("auto_trade_tf_weight_m5", 0.30),
             "tf_weight_m15": state.get("auto_trade_tf_weight_m15", 0.20),

@@ -109,6 +109,23 @@ from ta.volatility import BollingerBands, AverageTrueRange
 from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.trend import MACD, SMAIndicator
 
+
+SUPPORTED_TIMEFRAMES = ("M1", "M5", "M15", "M30", "H1", "H4", "D1")
+DEFAULT_SIGNAL_TIMEFRAMES = ("M1", "M5", "M15", "M30")
+
+
+def normalize_timeframes(timeframes):
+    if not timeframes:
+        return list(DEFAULT_SIGNAL_TIMEFRAMES)
+    normalized = []
+    for item in timeframes:
+        value = str(item or "").strip().upper()
+        if value in SUPPORTED_TIMEFRAMES and value not in normalized:
+            normalized.append(value)
+    if len(normalized) < 2:
+        return list(DEFAULT_SIGNAL_TIMEFRAMES)
+    return normalized
+
 ###########################################################
 # Fungsi utama: Mengambil data OHLCV dari MetaTrader 5 API
 # OHLCV = Open, High, Low, Close, Volume (data candlestick)
@@ -119,8 +136,14 @@ def fetch_ohlcv(symbol, timeframe, bars=100, terminal_path=None):
         'M1': mt5.TIMEFRAME_M1,   # 1 menit
         'M5': mt5.TIMEFRAME_M5,   # 5 menit
         'M15': mt5.TIMEFRAME_M15, # 15 menit
-        'M30': mt5.TIMEFRAME_M30  # 30 menit
+        'M30': mt5.TIMEFRAME_M30, # 30 menit
+        'H1': mt5.TIMEFRAME_H1,   # 1 jam
+        'H4': mt5.TIMEFRAME_H4,   # 4 jam
+        'D1': mt5.TIMEFRAME_D1,   # 1 hari
     }
+    tf = str(timeframe or "").strip().upper()
+    if tf not in tf_map:
+        raise RuntimeError(f"Unsupported timeframe: {timeframe}")
     # Inisialisasi koneksi ke MetaTrader 5
     initialized = False
     try:
@@ -133,7 +156,7 @@ def fetch_ohlcv(symbol, timeframe, bars=100, terminal_path=None):
 
         # Ambil 60 bar ekstra dari permintaan
         bars_fetch = bars + 60
-        rates = mt5.copy_rates_from_pos(symbol, tf_map[timeframe], 0, bars_fetch)
+        rates = mt5.copy_rates_from_pos(symbol, tf_map[tf], 0, bars_fetch)
         if rates is None or len(rates) == 0:
             raise RuntimeError(f"No data for {symbol} {timeframe}")
         df = pd.DataFrame(rates)
@@ -212,12 +235,12 @@ def generate_signal(indicators, mode='real'):
 # Memanggil fetch_ohlcv dan calculate_indicators untuk tiap TF
 ###########################################################
 def analyze_symbol(symbol, bars=60, timeframes=None, mode='real', terminal_path=None, atr_period=14):
-    timeframes = ['M1', 'M5', 'M15', 'M30']
+    timeframes = normalize_timeframes(timeframes)
     indicators = {}
     errors = {}
     for tf in timeframes:
         try:
-            df = fetch_ohlcv(symbol, tf, terminal_path=terminal_path)
+            df = fetch_ohlcv(symbol, tf, bars=bars, terminal_path=terminal_path)
             indicators[tf] = calculate_indicators(df, atr_period=atr_period)
         except Exception as e:
             errors[tf] = str(e)

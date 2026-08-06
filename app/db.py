@@ -7,6 +7,8 @@ from contextlib import contextmanager
 DB_PATH = "trading_data.db"
 
 AUTO_TRADE_PROFILE_KEYS = [
+    "auto_trade_strategy_name",
+    "auto_trade_strategy_revision",
     "auto_trade_symbol",
     "auto_trade_interval_sec",
     "auto_analytic_tpsl",
@@ -35,6 +37,7 @@ AUTO_TRADE_PROFILE_KEYS = [
     "auto_trade_trailing_atr_mult",
     "auto_trade_confidence_model",
     "auto_trade_confidence_threshold",
+    "auto_trade_timeframes",
     "auto_trade_tf_weight_m1",
     "auto_trade_tf_weight_m5",
     "auto_trade_tf_weight_m15",
@@ -110,6 +113,28 @@ def _serialize_profile_payload(profile_dict):
     return {k: profile_dict.get(k) for k in AUTO_TRADE_PROFILE_KEYS if k in profile_dict}
 
 
+def _safe_json_dumps(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=True)
+    except Exception:
+        return None
+
+
+def _safe_json_loads(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return None
+
+
 def get_auto_trade_risk_policy():
     with get_db() as conn:
         row = conn.execute(
@@ -164,6 +189,8 @@ def init_db():
                 id INTEGER PRIMARY KEY,
                 balance REAL DEFAULT 1000,
                 initial_balance REAL DEFAULT 1000,
+                auto_trade_strategy_name TEXT DEFAULT 'default',
+                auto_trade_strategy_revision INTEGER DEFAULT 1,
                 enable_real_trade INTEGER DEFAULT 0,
                 auto_trade_enabled INTEGER DEFAULT 0,
                 keep_terminal_alive INTEGER DEFAULT 1,
@@ -198,6 +225,7 @@ def init_db():
                 auto_trade_trailing_atr_mult REAL DEFAULT 1.0,
                 auto_trade_confidence_model TEXT DEFAULT 'weighted',
                 auto_trade_confidence_threshold REAL DEFAULT 0.6,
+                auto_trade_timeframes TEXT DEFAULT 'M1,M5,M15,M30',
                 auto_trade_tf_weight_m1 REAL DEFAULT 0.35,
                 auto_trade_tf_weight_m5 REAL DEFAULT 0.30,
                 auto_trade_tf_weight_m15 REAL DEFAULT 0.20,
@@ -216,6 +244,8 @@ def init_db():
             """
         )
         _add_column_if_missing(conn, "account_state", "auto_trade_enabled", "INTEGER DEFAULT 0")
+        _add_column_if_missing(conn, "account_state", "auto_trade_strategy_name", "TEXT DEFAULT 'default'")
+        _add_column_if_missing(conn, "account_state", "auto_trade_strategy_revision", "INTEGER DEFAULT 1")
         _add_column_if_missing(conn, "account_state", "keep_terminal_alive", "INTEGER DEFAULT 1")
         _add_column_if_missing(conn, "account_state", "data_feed_broker_id", "INTEGER")
         _add_column_if_missing(conn, "account_state", "auto_trade_symbol", "TEXT DEFAULT 'XAUUSD'")
@@ -243,6 +273,7 @@ def init_db():
         _add_column_if_missing(conn, "account_state", "auto_trade_trailing_atr_mult", "REAL DEFAULT 1.0")
         _add_column_if_missing(conn, "account_state", "auto_trade_confidence_model", "TEXT DEFAULT 'weighted'")
         _add_column_if_missing(conn, "account_state", "auto_trade_confidence_threshold", "REAL DEFAULT 0.6")
+        _add_column_if_missing(conn, "account_state", "auto_trade_timeframes", "TEXT DEFAULT 'M1,M5,M15,M30'")
         _add_column_if_missing(conn, "account_state", "auto_trade_tf_weight_m1", "REAL DEFAULT 0.35")
         _add_column_if_missing(conn, "account_state", "auto_trade_tf_weight_m5", "REAL DEFAULT 0.30")
         _add_column_if_missing(conn, "account_state", "auto_trade_tf_weight_m15", "REAL DEFAULT 0.20")
@@ -261,6 +292,7 @@ def init_db():
             """
             INSERT INTO account_state (
                 id, balance, initial_balance, enable_real_trade, auto_trade_enabled,
+                auto_trade_strategy_name, auto_trade_strategy_revision,
                 keep_terminal_alive, data_feed_broker_id,
                 auto_analytic_tpsl, tp_value, sl_value, lot, max_open_trades,
                 auto_trade_symbol, auto_trade_interval_sec,
@@ -275,7 +307,7 @@ def init_db():
                 auto_trade_atr_sl_mult, auto_trade_atr_tp_mult,
                 auto_trade_trailing_enabled, auto_trade_trailing_activation_rr,
                 auto_trade_trailing_atr_mult, auto_trade_confidence_model,
-                auto_trade_confidence_threshold,
+                auto_trade_confidence_threshold, auto_trade_timeframes,
                 auto_trade_tf_weight_m1, auto_trade_tf_weight_m5,
                 auto_trade_tf_weight_m15, auto_trade_tf_weight_m30,
                 auto_trade_partial_tp_enabled,
@@ -285,7 +317,7 @@ def init_db():
                 auto_trade_break_even_rr, auto_trade_break_even_offset_atr_mult,
                 auto_trade_trailing_mode, auto_trade_stateful_trail_buffer_atr_mult
             )
-            VALUES (1, 1000, 1000, 0, 0, 1, NULL, 0, 0.5, NULL, 0.01, 1, 'XAUUSD', 2, 90, 0, 'fixed_lot', 1.0, 1, 1, 30, 70, 120, 0.55, 1, 30, 0, 24, 1, 14, 1.5, 2.5, 1, 1.0, 1.0, 'weighted', 0.6, 0.35, 0.30, 0.20, 0.15, 1, 1.0, 40.0, 2.0, 35.0, 1, 1.0, 0.1, 'stateful_hl', 0.5)
+            VALUES (1, 1000, 1000, 0, 0, 'default', 1, 1, NULL, 0, 0.5, NULL, 0.01, 1, 'XAUUSD', 2, 90, 0, 'fixed_lot', 1.0, 1, 1, 30, 70, 120, 0.55, 1, 30, 0, 24, 1, 14, 1.5, 2.5, 1, 1.0, 1.0, 'weighted', 0.6, 'M1,M5,M15,M30', 0.35, 0.30, 0.20, 0.15, 1, 1.0, 40.0, 2.0, 35.0, 1, 1.0, 0.1, 'stateful_hl', 0.5)
             ON CONFLICT(id) DO NOTHING
             """
         )
@@ -411,8 +443,34 @@ def init_db():
                 profit REAL,
                 rr REAL,
                 session_hour INTEGER,
+                strategy_name TEXT,
+                strategy_revision INTEGER,
                 payload_json TEXT
             )
+            """
+        )
+        _add_column_if_missing(conn, "auto_trade_events", "strategy_name", "TEXT")
+        _add_column_if_missing(conn, "auto_trade_events", "strategy_revision", "INTEGER")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auto_trade_strategy_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_name TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                broker_id INTEGER,
+                account_id INTEGER,
+                config_json TEXT NOT NULL,
+                note TEXT,
+                source TEXT,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_auto_trade_strategy_versions_name_scope
+            ON auto_trade_strategy_versions(strategy_name, broker_id, account_id, revision)
             """
         )
         conn.execute(
@@ -441,6 +499,9 @@ def init_db():
         _add_column_if_missing(conn, "trade_history", "balance", "REAL")
         _add_column_if_missing(conn, "trade_history", "atr_value", "REAL")
         _add_column_if_missing(conn, "trade_history", "session_hour", "INTEGER")
+        _add_column_if_missing(conn, "trade_history", "signal_context_json", "TEXT")
+        _add_column_if_missing(conn, "trade_history", "strategy_name", "TEXT")
+        _add_column_if_missing(conn, "trade_history", "strategy_revision", "INTEGER")
 
         conn.execute(
             """
@@ -581,7 +642,7 @@ def get_account_state():
                      auto_trade_atr_sl_mult, auto_trade_atr_tp_mult,
                      auto_trade_trailing_enabled, auto_trade_trailing_activation_rr,
                      auto_trade_trailing_atr_mult, auto_trade_confidence_model,
-                     auto_trade_confidence_threshold,
+                     auto_trade_confidence_threshold, auto_trade_timeframes,
                      auto_trade_tf_weight_m1, auto_trade_tf_weight_m5,
                      auto_trade_tf_weight_m15, auto_trade_tf_weight_m30,
                      auto_trade_partial_tp_enabled,
@@ -632,6 +693,7 @@ def get_account_state():
                 "auto_trade_trailing_atr_mult": 1.0,
                 "auto_trade_confidence_model": "weighted",
                 "auto_trade_confidence_threshold": 0.6,
+                "auto_trade_timeframes": "M1,M5,M15,M30",
                 "auto_trade_tf_weight_m1": 0.35,
                 "auto_trade_tf_weight_m5": 0.30,
                 "auto_trade_tf_weight_m15": 0.20,
@@ -688,6 +750,7 @@ def get_account_state():
             "auto_trade_trailing_atr_mult": float(row["auto_trade_trailing_atr_mult"] if row["auto_trade_trailing_atr_mult"] is not None else 1.0),
             "auto_trade_confidence_model": (row["auto_trade_confidence_model"] or "weighted"),
             "auto_trade_confidence_threshold": float(row["auto_trade_confidence_threshold"] if row["auto_trade_confidence_threshold"] is not None else 0.6),
+            "auto_trade_timeframes": str(row["auto_trade_timeframes"] or "M1,M5,M15,M30"),
             "auto_trade_tf_weight_m1": float(row["auto_trade_tf_weight_m1"] if row["auto_trade_tf_weight_m1"] is not None else 0.35),
             "auto_trade_tf_weight_m5": float(row["auto_trade_tf_weight_m5"] if row["auto_trade_tf_weight_m5"] is not None else 0.30),
             "auto_trade_tf_weight_m15": float(row["auto_trade_tf_weight_m15"] if row["auto_trade_tf_weight_m15"] is not None else 0.20),
@@ -729,7 +792,7 @@ def save_account_state(state):
                 auto_trade_atr_sl_mult, auto_trade_atr_tp_mult,
                 auto_trade_trailing_enabled, auto_trade_trailing_activation_rr,
                 auto_trade_trailing_atr_mult, auto_trade_confidence_model,
-                auto_trade_confidence_threshold,
+                auto_trade_confidence_threshold, auto_trade_timeframes,
                 auto_trade_tf_weight_m1, auto_trade_tf_weight_m5,
                 auto_trade_tf_weight_m15, auto_trade_tf_weight_m30,
                 auto_trade_partial_tp_enabled,
@@ -739,7 +802,7 @@ def save_account_state(state):
                 auto_trade_break_even_rr, auto_trade_break_even_offset_atr_mult,
                 auto_trade_trailing_mode, auto_trade_stateful_trail_buffer_atr_mult
             )
-            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 balance = excluded.balance,
                 initial_balance = excluded.initial_balance,
@@ -777,6 +840,7 @@ def save_account_state(state):
                 auto_trade_trailing_atr_mult = excluded.auto_trade_trailing_atr_mult,
                 auto_trade_confidence_model = excluded.auto_trade_confidence_model,
                 auto_trade_confidence_threshold = excluded.auto_trade_confidence_threshold,
+                auto_trade_timeframes = excluded.auto_trade_timeframes,
                 auto_trade_tf_weight_m1 = excluded.auto_trade_tf_weight_m1,
                 auto_trade_tf_weight_m5 = excluded.auto_trade_tf_weight_m5,
                 auto_trade_tf_weight_m15 = excluded.auto_trade_tf_weight_m15,
@@ -829,6 +893,7 @@ def save_account_state(state):
                 state.get("auto_trade_trailing_atr_mult", 1.0),
                 state.get("auto_trade_confidence_model", "weighted"),
                 state.get("auto_trade_confidence_threshold", 0.6),
+                state.get("auto_trade_timeframes", "M1,M5,M15,M30"),
                 state.get("auto_trade_tf_weight_m1", 0.35),
                 state.get("auto_trade_tf_weight_m5", 0.30),
                 state.get("auto_trade_tf_weight_m15", 0.20),
@@ -883,9 +948,10 @@ def append_trade_history(trade):
                 tpValue, slValue, broker_id, broker_name, account_id,
                 platform, execution_mode, terminal_path,
                 trailing_mode, risk_mode, signal_score, spread_points,
-                margin_usage_pct, equity, balance, atr_value, session_hour
+                margin_usage_pct, equity, balance, atr_value, session_hour,
+                signal_context_json, strategy_name, strategy_revision
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade.get("trade_id"),
@@ -917,6 +983,9 @@ def append_trade_history(trade):
                 trade.get("balance"),
                 trade.get("atr_value"),
                 trade.get("session_hour"),
+                _safe_json_dumps(trade.get("signal_context") if trade.get("signal_context") is not None else trade.get("signal_context_json")),
+                trade.get("strategy_name"),
+                trade.get("strategy_revision"),
             ),
         )
 
@@ -930,7 +999,8 @@ def get_trade_history():
                      trade_id, status, symbol, lot, ticket,
                    execution_mode, terminal_path,
                    trailing_mode, risk_mode, signal_score, spread_points,
-                   margin_usage_pct, equity, balance, atr_value, session_hour
+                     margin_usage_pct, equity, balance, atr_value, session_hour,
+                     signal_context_json, strategy_name, strategy_revision
             FROM trade_history
             ORDER BY entryTime ASC, id ASC
             """
@@ -966,6 +1036,9 @@ def get_trade_history():
                 "balance": row["balance"],
                 "atr_value": row["atr_value"],
                 "session_hour": row["session_hour"],
+                "signal_context": _safe_json_loads(row["signal_context_json"]),
+                "strategy_name": row["strategy_name"],
+                "strategy_revision": row["strategy_revision"],
             }
             for row in rows
         ]
@@ -981,9 +1054,10 @@ def create_trade_open_record(trade):
                 tpValue, slValue, broker_id, broker_name, account_id, platform,
                 execution_mode, terminal_path,
                 trailing_mode, risk_mode, signal_score, spread_points,
-                margin_usage_pct, equity, balance, atr_value, session_hour
+                margin_usage_pct, equity, balance, atr_value, session_hour,
+                signal_context_json, strategy_name, strategy_revision
             )
-            VALUES (?, 'open', ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, 'open', ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade.get("trade_id"),
@@ -1011,6 +1085,9 @@ def create_trade_open_record(trade):
                 trade.get("balance"),
                 trade.get("atr_value"),
                 trade.get("session_hour"),
+                _safe_json_dumps(trade.get("signal_context") if trade.get("signal_context") is not None else trade.get("signal_context_json")),
+                trade.get("strategy_name"),
+                trade.get("strategy_revision"),
             ),
         )
 
@@ -1107,7 +1184,10 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                     equity = CASE WHEN ? IS NULL THEN equity ELSE ? END,
                     balance = CASE WHEN ? IS NULL THEN balance ELSE ? END,
                     atr_value = CASE WHEN ? IS NULL THEN atr_value ELSE ? END,
-                    session_hour = CASE WHEN ? IS NULL THEN session_hour ELSE ? END
+                    session_hour = CASE WHEN ? IS NULL THEN session_hour ELSE ? END,
+                    signal_context_json = COALESCE(?, signal_context_json),
+                    strategy_name = COALESCE(?, strategy_name),
+                    strategy_revision = COALESCE(?, strategy_revision)
                 WHERE id = ?
                 """,
                 (
@@ -1152,6 +1232,9 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                     trade.get("atr_value"),
                     trade.get("session_hour"),
                     trade.get("session_hour"),
+                    _safe_json_dumps(trade.get("signal_context") if trade.get("signal_context") is not None else trade.get("signal_context_json")),
+                    trade.get("strategy_name"),
+                    trade.get("strategy_revision"),
                     row["id"],
                 ),
             )
@@ -1165,9 +1248,10 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                 tpValue, slValue, broker_id, broker_name, account_id,
                 platform, execution_mode, terminal_path,
                 trailing_mode, risk_mode, signal_score, spread_points,
-                margin_usage_pct, equity, balance, atr_value, session_hour
+                margin_usage_pct, equity, balance, atr_value, session_hour,
+                signal_context_json, strategy_name, strategy_revision
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade_id,
@@ -1199,9 +1283,74 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                 trade.get("balance"),
                 trade.get("atr_value"),
                 trade.get("session_hour"),
+                _safe_json_dumps(trade.get("signal_context") if trade.get("signal_context") is not None else trade.get("signal_context_json")),
+                trade.get("strategy_name"),
+                trade.get("strategy_revision"),
             ),
         )
         return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+
+
+def get_recent_closed_trades(limit=20, broker_id=None, account_id=None):
+    safe_limit = max(1, min(int(limit or 20), 500))
+    with get_db() as conn:
+        clauses = ["status = 'closed'"]
+        params = []
+        if broker_id is not None:
+            clauses.append("COALESCE(broker_id, -1) = ?")
+            params.append(int(broker_id))
+        if account_id is not None:
+            clauses.append("COALESCE(account_id, -1) = ?")
+            params.append(int(account_id))
+        rows = conn.execute(
+            f"""
+            SELECT trade_id, type, symbol, lot, ticket, entry, exit, profit,
+                   entryTime, exitTime, reason, tpValue, slValue, broker_id,
+                   broker_name, account_id, platform, execution_mode,
+                   terminal_path, trailing_mode, risk_mode, signal_score,
+                   spread_points, margin_usage_pct, equity, balance, atr_value,
+                   session_hour, signal_context_json
+            FROM trade_history
+            WHERE {' AND '.join(clauses)}
+            ORDER BY COALESCE(exitTime, entryTime, 0) DESC, id DESC
+            LIMIT ?
+            """,
+            (*params, safe_limit),
+        ).fetchall()
+    return [
+        {
+            "trade_id": row["trade_id"],
+            "type": row["type"],
+            "symbol": row["symbol"],
+            "lot": row["lot"],
+            "ticket": row["ticket"],
+            "entry": row["entry"],
+            "exit": row["exit"],
+            "profit": row["profit"],
+            "entryTime": row["entryTime"],
+            "exitTime": row["exitTime"],
+            "reason": row["reason"],
+            "tpValue": row["tpValue"],
+            "slValue": row["slValue"],
+            "broker_id": row["broker_id"],
+            "broker_name": row["broker_name"],
+            "account_id": row["account_id"],
+            "platform": row["platform"],
+            "execution_mode": row["execution_mode"],
+            "terminal_path": row["terminal_path"],
+            "trailing_mode": row["trailing_mode"],
+            "risk_mode": row["risk_mode"],
+            "signal_score": row["signal_score"],
+            "spread_points": row["spread_points"],
+            "margin_usage_pct": row["margin_usage_pct"],
+            "equity": row["equity"],
+            "balance": row["balance"],
+            "atr_value": row["atr_value"],
+            "session_hour": row["session_hour"],
+            "signal_context": _safe_json_loads(row["signal_context_json"]),
+        }
+        for row in rows
+    ]
 
 
 def close_trade_record(trade_id, *, exit_price=None, profit=None, exit_time=None, ticket=None, reason="close"):

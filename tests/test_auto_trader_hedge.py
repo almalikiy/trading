@@ -140,3 +140,52 @@ def test_should_release_hedge_true_when_loss_recovers(monkeypatch):
     hedge_rows = [{"trade_id": "h1", "risk_mode": "hedge"}]
 
     assert auto_trader._should_release_hedge(state, metrics, hedge_rows) is True
+
+
+def test_direction_bias_guard_blocks_consecutive_same_side_losses(monkeypatch):
+    monkeypatch.setattr(
+        auto_trader,
+        "get_recent_closed_trades",
+        lambda limit=18, broker_id=None, account_id=None: [
+            {"type": "SELL", "profit": -30.0},
+            {"type": "SELL", "profit": -22.0},
+            {"type": "SELL", "profit": -11.0},
+            {"type": "BUY", "profit": 10.0},
+        ],
+    )
+
+    allowed, meta = auto_trader._passes_direction_bias_guard("sell", broker_id=1, account_id=2)
+    assert allowed is False
+    assert meta["reason"] == "direction_loss_streak_guard"
+    assert meta["consecutive_losses_same_side"] == 3
+
+
+def test_direction_bias_guard_allows_when_recent_is_healthy(monkeypatch):
+    monkeypatch.setattr(
+        auto_trader,
+        "get_recent_closed_trades",
+        lambda limit=18, broker_id=None, account_id=None: [
+            {"type": "SELL", "profit": 12.0},
+            {"type": "SELL", "profit": -5.0},
+            {"type": "BUY", "profit": 8.0},
+            {"type": "BUY", "profit": -3.0},
+        ],
+    )
+
+    allowed, meta = auto_trader._passes_direction_bias_guard("sell", broker_id=1, account_id=2)
+    assert allowed is True
+    assert meta["reason"] is None
+
+
+def test_same_direction_open_guard_blocks_when_cap_reached():
+    state = {"auto_trade_max_same_direction_trades": 2}
+    open_rows = [
+        {"type": "SELL", "trade_id": "s1"},
+        {"type": "SELL", "trade_id": "s2"},
+        {"type": "BUY", "trade_id": "b1"},
+    ]
+
+    allowed, meta = auto_trader._passes_same_direction_open_guard(state, open_rows, "sell", max_open_trades=5)
+    assert allowed is False
+    assert meta["reason"] == "same_direction_open_limit"
+    assert meta["same_side_open"] == 2

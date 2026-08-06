@@ -118,7 +118,16 @@ function formatTradeTime(epochSeconds) {
   if (!epochSeconds) return "-";
   const value = Number(epochSeconds);
   if (!Number.isFinite(value) || value <= 0) return "-";
-  return new Date(value * 1000).toLocaleString();
+  const epochMs = value > 1_000_000_000_000 ? value : value * 1000;
+  return new Date(epochMs).toLocaleString();
+}
+
+function getClientTimeZoneLabel() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "Local";
+  } catch {
+    return "Local";
+  }
 }
 
 export default function App( { darkMode, setDarkMode }) {
@@ -180,6 +189,7 @@ export default function App( { darkMode, setDarkMode }) {
   const totalFloatingPnl = openPositions.reduce((sum, trade) => sum + calcTradeFloatingPnl(trade, lastPrice), 0);
 
   const theme = useTheme();
+  const clientTimeZone = getClientTimeZoneLabel();
 
   const refreshAccountState = () => {
     fetch(`${getBackendUrl("mt5", "http")}/account/state`)
@@ -960,10 +970,16 @@ export default function App( { darkMode, setDarkMode }) {
         <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 2, overflowX: "auto", width: "100%" }}>
           <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 1 }}>
             <Typography variant="h6">Active Trades</Typography>
-            <Button size="small" variant="outlined" onClick={() => { refreshOpenPositions(); refreshOpenCount(); }}>
-              Refresh
-            </Button>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+              <Chip size="small" variant="outlined" label={`Time Zone: ${clientTimeZone}`} />
+              <Button size="small" variant="outlined" onClick={() => { refreshOpenPositions(); refreshOpenCount(); }}>
+                Refresh
+              </Button>
+            </Box>
           </Box>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+            Nilai TP/SL di tabel adalah jarak harga dari entry untuk auto-close backend (bukan nilai floating P/L langsung), dan dapat menyesuaikan dinamis saat trailing/break-even aktif.
+          </Typography>
 
           {positionsLoading ? (
             <Box sx={{ py: 2, display: "flex", justifyContent: "center" }}>
@@ -978,11 +994,12 @@ export default function App( { darkMode, setDarkMode }) {
                   <TableRow>
                     <TableCell>Type</TableCell>
                     <TableCell>Symbol</TableCell>
+                    <TableCell>Ticket</TableCell>
                     <TableCell>Lot</TableCell>
                     <TableCell>Entry</TableCell>
-                    <TableCell>Open Time</TableCell>
+                    <TableCell>Open Time (Local)</TableCell>
                     <TableCell>Current</TableCell>
-                    <TableCell>Floating</TableCell>
+                    <TableCell>Floating (Est.)</TableCell>
                     <TableCell>TP</TableCell>
                     <TableCell>SL</TableCell>
                     <TableCell>Broker</TableCell>
@@ -1003,6 +1020,7 @@ export default function App( { darkMode, setDarkMode }) {
                       <TableRow key={id}>
                         <TableCell>{String(trade.type || "-").toUpperCase()}</TableCell>
                         <TableCell>{trade.symbol || "-"}</TableCell>
+                        <TableCell>{trade.ticket || "-"}</TableCell>
                         <TableCell>{trade.lot ?? "-"}</TableCell>
                         <TableCell>{trade.entry ?? "-"}</TableCell>
                         <TableCell>{formatTradeTime(trade.entryTime)}</TableCell>
@@ -1013,19 +1031,29 @@ export default function App( { darkMode, setDarkMode }) {
                         <TableCell sx={{ minWidth: 110 }}>
                           <TextField
                             size="small"
+                            variant="filled"
                             type="number"
                             value={draft.tpValue}
                             onChange={(e) => setTpSlDrafts((prev) => ({ ...prev, [id]: { ...draft, tpValue: e.target.value } }))}
                             inputProps={{ step: 0.1 }}
+                            sx={{
+                              "& .MuiFilledInput-root": { bgcolor: "action.disabledBackground" },
+                              "& .MuiInputBase-input": { color: "text.secondary" },
+                            }}
                           />
                         </TableCell>
                         <TableCell sx={{ minWidth: 110 }}>
                           <TextField
                             size="small"
+                            variant="filled"
                             type="number"
                             value={draft.slValue}
                             onChange={(e) => setTpSlDrafts((prev) => ({ ...prev, [id]: { ...draft, slValue: e.target.value } }))}
                             inputProps={{ step: 0.1 }}
+                            sx={{
+                              "& .MuiFilledInput-root": { bgcolor: "action.disabledBackground" },
+                              "& .MuiInputBase-input": { color: "text.secondary" },
+                            }}
                           />
                         </TableCell>
                         <TableCell>{trade.broker_name || "-"}</TableCell>

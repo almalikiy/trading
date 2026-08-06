@@ -55,6 +55,7 @@ def test_init_db_adds_default_symbol_column(tmp_path):
 
         trade_columns = {row[1] for row in conn.execute("PRAGMA table_info(trade_history)")}
         assert "account_id" in trade_columns
+        assert "signal_context_json" in trade_columns
 
         error_columns = {row[1] for row in conn.execute("PRAGMA table_info(mt5_error_log)")}
         assert "account_id" in error_columns
@@ -300,3 +301,50 @@ def test_auto_trade_event_persistence_and_statistics(tmp_path):
     assert stats["signal_blocks"] == 0
     assert stats["average_signal_score"] == 0.62
     assert stats["trailing_mode_performance"][0]["mode"] == "stateful_hl"
+
+
+def test_trade_history_signal_context_and_recent_closed(tmp_path):
+    db.DB_PATH = str(tmp_path / "test.db")
+    db.init_db()
+
+    db.create_trade_open_record(
+        {
+            "trade_id": "ctx-open-1",
+            "type": "SELL",
+            "symbol": "XAUUSD",
+            "lot": 0.2,
+            "ticket": 222,
+            "entry": 2400.0,
+            "entryTime": 1725100000,
+            "reason": "auto_open:0.733",
+            "tpValue": 15.0,
+            "slValue": 8.0,
+            "broker_id": 7,
+            "broker_name": "Broker Seven",
+            "account_id": 123456,
+            "platform": "mt5",
+            "execution_mode": "direct",
+            "terminal_path": "C:/Terminal/terminal64.exe",
+            "risk_mode": "hedge",
+            "signal_context": {
+                "raw_signal": "sell",
+                "resolved_signal": "sell",
+                "score": 0.733,
+                "timeframes": {"M1": {"rsi": 62.4, "direction": "sell"}},
+            },
+        }
+    )
+
+    db.close_trade_record("ctx-open-1", exit_price=2392.0, profit=-60.0, exit_time=1725100500, ticket=222, reason="stop_loss")
+
+    history = db.get_trade_history()
+    row = next(item for item in history if item.get("trade_id") == "ctx-open-1")
+    assert isinstance(row.get("signal_context"), dict)
+    assert row["signal_context"]["resolved_signal"] == "sell"
+    assert row["signal_context"]["timeframes"]["M1"]["direction"] == "sell"
+
+    recent = db.get_recent_closed_trades(limit=5, broker_id=7, account_id=123456)
+    assert len(recent) == 1
+    assert recent[0]["trade_id"] == "ctx-open-1"
+    assert recent[0]["type"] == "SELL"
+    assert recent[0]["profit"] == -60.0

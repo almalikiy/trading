@@ -13,6 +13,7 @@ from .db import (
     get_broker,
     get_default_broker,
     get_trade_history,
+    get_recent_closed_trades,
     list_brokers,
     list_open_trades,
     log_mt5_error,
@@ -22,12 +23,13 @@ from .db import (
     update_open_trade_tpsl,
     get_risk_mode_performance,
 )
-from .logic import analyze_symbol, fetch_ohlcv
+from .logic import analyze_symbol, fetch_ohlcv, normalize_timeframes
 from .ml_risk import log_trade, predict_risk_mode
 from .terminal_adapters import (
     ensure_terminal_running,
     get_broker_adapter,
     get_broker_account_metrics,
+    get_broker_symbol_tick,
     get_broker_symbol_constraints,
     normalize_lot_with_constraints,
     probe_broker_order_status,
@@ -385,7 +387,19 @@ def _timeframe_weights(state):
         "M5": max(0.0, _coerce_float(state.get("auto_trade_tf_weight_m5"), 0.30)),
         "M15": max(0.0, _coerce_float(state.get("auto_trade_tf_weight_m15"), 0.20)),
         "M30": max(0.0, _coerce_float(state.get("auto_trade_tf_weight_m30"), 0.15)),
+        "H1": max(0.0, _coerce_float(state.get("auto_trade_tf_weight_h1"), 0.10)),
+        "H4": max(0.0, _coerce_float(state.get("auto_trade_tf_weight_h4"), 0.05)),
+        "D1": max(0.0, _coerce_float(state.get("auto_trade_tf_weight_d1"), 0.05)),
     }
+
+
+def _resolve_analysis_timeframes(state):
+    raw = state.get("auto_trade_timeframes")
+    if isinstance(raw, (list, tuple)):
+        return normalize_timeframes(raw)
+    if isinstance(raw, str):
+        return normalize_timeframes([part.strip() for part in raw.split(",")])
+    return normalize_timeframes(None)
 
 
 def _score_timeframe(values):
@@ -504,6 +518,140 @@ def _resolve_atr_value(signal_payload):
     if values:
         return sum(values) / len(values)
     return None
+
+
+def _rounded(value, digits=6):
+    if value is None:
+        return None
+    try:
+        return round(float(value), int(digits))
+    except Exception:
+        return None
+
+
+def _build_signal_context(signal_payload, signal_scoring, raw_signal, resolved_signal, atr_value):
+    indicators = (signal_payload or {}).get("indicators") or {}
+    per_tf = {}
+    score_map = (signal_scoring or {}).get("per_timeframe") or {}
+    for tf in sorted(indicators.keys()):
+        values = indicators.get(tf)
+        if not isinstance(values, dict):
+            continue
+        tf_score = score_map.get(tf) if isinstance(score_map.get(tf), dict) else {}
+        per_tf[tf] = {
+            "rsi": _rounded(values.get("rsi"), 3),
+            "macd": _rounded(values.get("macd"), 6),
+            "macd_signal": _rounded(values.get("macd_signal"), 6),
+            "sma": _rounded(values.get("sma"), 6),
+            "bb_mid": _rounded(values.get("bb_mid"), 6),
+            "stoch_k": _rounded(values.get("stoch_k"), 3),
+            "stoch_d": _rounded(values.get("stoch_d"), 3),
+            "atr": _rounded(values.get("atr"), 6),
+            "direction": tf_score.get("direction"),
+            "score": _rounded(tf_score.get("score"), 6),
+            "buy": _rounded(tf_score.get("buy"), 6),
+            "sell": _rounded(tf_score.get("sell"), 6),
+        }
+
+    return {
+        "captured_at": int(time.time()),
+        "raw_signal": str(raw_signal or "wait"),
+        "resolved_signal": str(resolved_signal or "wait"),
+        "score": _rounded((signal_scoring or {}).get("score"), 6),
+        "buy": _rounded((signal_scoring or {}).get("buy"), 6),
+        "sell": _rounded((signal_scoring or {}).get("sell"), 6),
+        "atr_value": _rounded(atr_value, 6),
+        "timeframes": per_tf,
+    }
+
+
+def _passes_direction_bias_guard(signal, broker_id=None, account_id=None):
+    direction = str(signal or "").strip().upper()
+    if direction not in ("BUY", "SELL"):
+        return True, None
+
+    recent = get_recent_closed_trades(limit=18, broker_id=broker_id, account_id=account_id)
+    if not recent:
+        return True, None
+
+    valid_rows = []
+    for row in recent:
+        trade_type = str(row.get("type") or "").strip().upper()
+        if trade_type not in ("BUY", "SELL"):
+            continue
+        try:
+            profit = float(row.get("profit") or 0.0)
+        except Exception:
+            profit = 0.0
+        valid_rows.append({"type": trade_type, "profit": profit, "trade_id": row.get("trade_id")})
+
+    if not valid_rows:
+        return True, None
+
+    consecutive_losses_same_side = 0
+    for row in valid_rows:
+        if row["type"] != direction:
+            break
+        if row["profit"] >= 0:
+            break
+        consecutive_losses_same_side += 1
+
+    same_side_rows = [row for row in valid_rows if row["type"] == direction]
+    same_side_count = len(same_side_rows)
+    same_side_losses = len([row for row in same_side_rows if row["profit"] < 0])
+    same_side_net = sum(row["profit"] for row in same_side_rows)
+    ratio = (same_side_count / len(valid_rows)) if valid_rows else 0.0
+
+    blocked = False
+    reason = None
+    if consecutive_losses_same_side >= 3:
+        blocked = True
+        reason = "direction_loss_streak_guard"
+    elif same_side_count >= 8 and ratio >= 0.80 and same_side_net < 0:
+        blocked = True
+        reason = "direction_one_side_bias_guard"
+
+    payload = {
+        "direction": direction,
+        "recent_rows": len(valid_rows),
+        "same_side_count": same_side_count,
+        "same_side_losses": same_side_losses,
+        "same_side_net": round(same_side_net, 4),
+        "same_side_ratio": round(ratio, 4),
+        "consecutive_losses_same_side": consecutive_losses_same_side,
+        "reason": reason,
+    }
+    return (not blocked), payload
+
+
+def _passes_same_direction_open_guard(state, normal_open_rows, signal, max_open_trades):
+    direction = str(signal or "").strip().upper()
+    if direction not in ("BUY", "SELL"):
+        return True, None
+
+    default_cap = max(1, min(max_open_trades, 3))
+    cap = max(1, min(max_open_trades, _coerce_int((state or {}).get("auto_trade_max_same_direction_trades"), default_cap)))
+
+    same_side_open = len(
+        [
+            row
+            for row in (normal_open_rows or [])
+            if str(row.get("type") or "").strip().upper() == direction
+        ]
+    )
+    if same_side_open >= cap:
+        return False, {
+            "direction": direction,
+            "same_side_open": same_side_open,
+            "cap": cap,
+            "reason": "same_direction_open_limit",
+        }
+    return True, {
+        "direction": direction,
+        "same_side_open": same_side_open,
+        "cap": cap,
+        "reason": None,
+    }
 
 
 def _resolve_initial_tpsl(state, lot_to_open, atr_value):
@@ -1039,6 +1187,7 @@ def _run_auto_trade_cycle():
         symbol = str(state.get("auto_trade_symbol")).strip() or "XAUUSD"
 
     # Resolve per-account profile for the currently connected account on active broker.
+    profile_account_id = None
     if feed_broker:
         profile_metrics = get_broker_account_metrics(feed_broker, symbol=symbol, auto_start=False)
         profile_account_id = profile_metrics.get("account_id") if isinstance(profile_metrics, dict) else None
@@ -1084,7 +1233,8 @@ def _run_auto_trade_cycle():
 
     terminal_path = feed_broker.get("terminal_path") if feed_broker else None
     atr_period = max(5, min(100, _coerce_int(state.get("auto_trade_atr_period"), 14)))
-    signal_payload = analyze_symbol(symbol, mode="real", terminal_path=terminal_path, atr_period=atr_period)
+    timeframes = _resolve_analysis_timeframes(state)
+    signal_payload = analyze_symbol(symbol, mode="real", terminal_path=terminal_path, atr_period=atr_period, timeframes=timeframes)
     raw_signal = str(signal_payload.get("signal") or "wait").lower()
     signal_scoring = _signal_strength(signal_payload, state)
     signal = raw_signal if raw_signal in ("buy", "sell") else signal_scoring.get("direction", "wait")
@@ -1126,6 +1276,7 @@ def _run_auto_trade_cycle():
         signal = "wait"
 
     atr_value = _resolve_atr_value(signal_payload)
+    signal_context = _build_signal_context(signal_payload, signal_scoring, raw_signal, signal, atr_value)
 
     if signal == "sell" and not bool(state.get("auto_trade_allow_sell", True)):
         _diag_event("skip", "sell_disabled", symbol=symbol, signal=signal)
@@ -1141,11 +1292,65 @@ def _run_auto_trade_cycle():
         )
         signal = "wait"
 
+    broker_for_guard = (auto_open_broker or feed_broker or {}).get("id") if (auto_open_broker or feed_broker) else None
+    account_for_guard = profile_account_id
+    if signal in ("buy", "sell"):
+        guard_passed, guard_meta = _passes_direction_bias_guard(signal, broker_id=broker_for_guard, account_id=account_for_guard)
+        if not guard_passed:
+            _diag_event("skip", guard_meta.get("reason") or "direction_guard_blocked", symbol=symbol, signal=signal)
+            log_auto_trade_event(
+                {
+                    "timestamp": int(time.time()),
+                    "event_type": "blocked",
+                    "reason": guard_meta.get("reason") or "direction_guard_blocked",
+                    "broker_id": broker_for_guard,
+                    "account_id": account_for_guard,
+                    "symbol": symbol,
+                    "signal": signal,
+                    "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+                    "session_hour": current_hour,
+                    "payload": {
+                        "guard": guard_meta,
+                        "signal_context": signal_context,
+                    },
+                }
+            )
+            signal = "wait"
+
     open_rows = list_open_trades()
     _cleanup_runtime_for_open_trades(open_rows)
     normal_open_rows = [row for row in open_rows if not _is_hedge_trade(row)]
     hedge_open_rows = [row for row in open_rows if _is_hedge_trade(row)]
     max_open_trades = max(1, _coerce_int(state.get("max_open_trades", 1), 1))
+
+    if signal in ("buy", "sell"):
+        passed_side_open_guard, side_open_meta = _passes_same_direction_open_guard(
+            state,
+            normal_open_rows,
+            signal,
+            max_open_trades,
+        )
+        if not passed_side_open_guard:
+            _diag_event("skip", side_open_meta.get("reason") or "same_direction_open_limit", symbol=symbol, signal=signal)
+            log_auto_trade_event(
+                {
+                    "timestamp": int(time.time()),
+                    "event_type": "blocked",
+                    "reason": side_open_meta.get("reason") or "same_direction_open_limit",
+                    "broker_id": (auto_open_broker or feed_broker or {}).get("id") if (auto_open_broker or feed_broker) else None,
+                    "broker_name": (auto_open_broker or feed_broker or {}).get("name") if (auto_open_broker or feed_broker) else None,
+                    "account_id": profile_account_id,
+                    "symbol": symbol,
+                    "signal": signal,
+                    "signal_score": _coerce_float(signal_scoring.get("score"), 0.0),
+                    "session_hour": current_hour,
+                    "payload": {
+                        "guard": side_open_meta,
+                        "signal_context": signal_context,
+                    },
+                }
+            )
+            signal = "wait"
 
     hedge_broker = auto_open_broker or feed_broker
     hedge_metrics = {}
@@ -1481,6 +1686,7 @@ def _run_auto_trade_cycle():
             "balance": _coerce_float((metrics or {}).get("balance"), equity),
             "atr_value": atr_value,
             "session_hour": current_hour,
+            "signal_context": signal_context,
         }
         create_trade_open_record(open_trade_payload)
         log_trade(
@@ -1524,6 +1730,7 @@ def _run_auto_trade_cycle():
                     "risk_mode_reason": risk_mode_reason,
                     "manual_mode": state.get("auto_trade_risk_mode"),
                     "adaptive_meta": adaptive_meta,
+                    "signal_context": signal_context,
                 },
             }
         )
@@ -1561,10 +1768,21 @@ def _run_auto_trade_cycle():
         if method == "mouse":
             continue
 
-        latest_bar = _latest_bar(t.get("symbol") or symbol, broker.get("terminal_path"))
-        if latest_bar is None:
-            continue
-        last_price = _coerce_float(latest_bar.get("close"), 0.0)
+        last_price = 0.0
+        tick_snapshot = get_broker_symbol_tick(broker, symbol=t.get("symbol") or symbol, auto_start=False)
+        if tick_snapshot.get("ready"):
+            if direction == "buy":
+                last_price = _coerce_float(tick_snapshot.get("close_buy_price"), 0.0)
+            elif direction == "sell":
+                last_price = _coerce_float(tick_snapshot.get("close_sell_price"), 0.0)
+            if last_price <= 0:
+                last_price = _coerce_float(tick_snapshot.get("mid"), 0.0)
+
+        if last_price <= 0:
+            latest_bar = _latest_bar(t.get("symbol") or symbol, broker.get("terminal_path"))
+            if latest_bar is None:
+                continue
+            last_price = _coerce_float(latest_bar.get("close"), 0.0)
         if last_price <= 0:
             continue
 
