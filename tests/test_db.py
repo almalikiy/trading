@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app.db as db
+import app.ml_risk as ml_risk
 
 
 def test_init_db_adds_default_symbol_column(tmp_path):
@@ -49,6 +50,9 @@ def test_init_db_adds_default_symbol_column(tmp_path):
         assert "auto_trade_break_even_offset_atr_mult" in account_columns
         assert "auto_trade_trailing_mode" in account_columns
         assert "auto_trade_stateful_trail_buffer_atr_mult" in account_columns
+        assert "auto_trade_protective_mode" in account_columns
+        assert "auto_trade_min_hold_sec" in account_columns
+        assert "auto_trade_reversal_confirm_cycles" in account_columns
 
         columns = {row[1] for row in conn.execute("PRAGMA table_info(brokers)")}
         assert "default_symbol" in columns
@@ -56,6 +60,11 @@ def test_init_db_adds_default_symbol_column(tmp_path):
         trade_columns = {row[1] for row in conn.execute("PRAGMA table_info(trade_history)")}
         assert "account_id" in trade_columns
         assert "signal_context_json" in trade_columns
+        assert "mfe_price_distance" in trade_columns
+        assert "mae_price_distance" in trade_columns
+        assert "time_to_close_sec" in trade_columns
+        assert "target_first_crossed_at" in trade_columns
+        assert "time_to_target_cross_sec" in trade_columns
 
         error_columns = {row[1] for row in conn.execute("PRAGMA table_info(mt5_error_log)")}
         assert "account_id" in error_columns
@@ -335,16 +344,46 @@ def test_trade_history_signal_context_and_recent_closed(tmp_path):
         }
     )
 
-    db.close_trade_record("ctx-open-1", exit_price=2392.0, profit=-60.0, exit_time=1725100500, ticket=222, reason="stop_loss")
+    db.close_trade_record(
+        "ctx-open-1",
+        exit_price=2392.0,
+        profit=-60.0,
+        exit_time=1725100500,
+        ticket=222,
+        reason="stop_loss",
+        runtime_metrics={
+            "mfe_price_distance": 18.0,
+            "mae_price_distance": 7.5,
+            "target_first_crossed_at": 1725100300,
+        },
+    )
 
     history = db.get_trade_history()
     row = next(item for item in history if item.get("trade_id") == "ctx-open-1")
     assert isinstance(row.get("signal_context"), dict)
     assert row["signal_context"]["resolved_signal"] == "sell"
     assert row["signal_context"]["timeframes"]["M1"]["direction"] == "sell"
+    assert row["mfe_price_distance"] == 18.0
+    assert row["mae_price_distance"] == 7.5
+    assert row["time_to_close_sec"] == 500
+    assert row["target_first_crossed_at"] == 1725100300
+    assert row["time_to_target_cross_sec"] == 300
 
     recent = db.get_recent_closed_trades(limit=5, broker_id=7, account_id=123456)
     assert len(recent) == 1
     assert recent[0]["trade_id"] == "ctx-open-1"
     assert recent[0]["type"] == "SELL"
     assert recent[0]["profit"] == -60.0
+    assert recent[0]["mfe_price_distance"] == 18.0
+    assert recent[0]["time_to_target_cross_sec"] == 300
+
+    close_dataset = ml_risk.get_close_decision_dataset(limit=10, broker_id=7, account_id=123456)
+    assert len(close_dataset) == 1
+    assert close_dataset[0]["result"]["close_reason_family"] == "sl"
+    assert close_dataset[0]["result"]["target_crossed_before_close"] is True
+    assert close_dataset[0]["features"]["mfe_price_distance"] == 18.0
+
+    stats = db.get_auto_trade_statistics(window_days=3650, broker_id=7, account_id=123456)
+    assert stats["anomaly_audit"]["count"] == 1
+    assert stats["anomaly_audit"]["rows"][0]["trade_id"] == "ctx-open-1"
+    assert stats["anomaly_audit"]["rows"][0]["reason"] == "stop_loss"

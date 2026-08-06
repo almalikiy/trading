@@ -122,6 +122,12 @@ function formatTradeTime(epochSeconds) {
   return new Date(epochMs).toLocaleString();
 }
 
+function formatPrice(value, digits = 2) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "-";
+  return parsed.toFixed(digits);
+}
+
 function getClientTimeZoneLabel() {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "Local";
@@ -978,7 +984,7 @@ export default function App( { darkMode, setDarkMode }) {
             </Box>
           </Box>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
-            Nilai TP/SL di tabel adalah jarak harga dari entry untuk auto-close backend (bukan nilai floating P/L langsung), dan dapat menyesuaikan dinamis saat trailing/break-even aktif.
+            Nilai TP/SL di tabel adalah jarak harga dari entry untuk auto-close backend. Kolom Target Price menunjukkan level harga absolut yang sedang dipakai backend, termasuk penyesuaian adaptif dari indikator dan performa historis terakhir.
           </Typography>
 
           {positionsLoading ? (
@@ -1000,6 +1006,7 @@ export default function App( { darkMode, setDarkMode }) {
                     <TableCell>Open Time (Local)</TableCell>
                     <TableCell>Current</TableCell>
                     <TableCell>Floating (Est.)</TableCell>
+                    <TableCell>Target Price</TableCell>
                     <TableCell>TP</TableCell>
                     <TableCell>SL</TableCell>
                     <TableCell>Broker</TableCell>
@@ -1027,6 +1034,16 @@ export default function App( { darkMode, setDarkMode }) {
                         <TableCell>{lastPrice ?? "-"}</TableCell>
                         <TableCell sx={{ color: floating < 0 ? "error.main" : "success.main", fontWeight: 700 }}>
                           {Number(floating).toFixed(2)}
+                        </TableCell>
+                        <TableCell sx={{ minWidth: 130 }}>
+                          <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                            {formatPrice(trade.target_price, 2)}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {trade.target_meta?.mode === "adaptive"
+                              ? `x${formatPrice(trade.target_meta?.adaptive_factor, 2)} | win ${(Number(trade.target_meta?.recent_winrate || 0) * 100).toFixed(0)}%`
+                              : "static"}
+                          </Typography>
                         </TableCell>
                         <TableCell sx={{ minWidth: 110 }}>
                           <TextField

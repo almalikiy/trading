@@ -63,6 +63,9 @@ AUTO_TRADE_PROFILE_KEYS = [
     "auto_trade_risk_hybrid_addon_mode",
     "auto_trade_risk_adaptive_window_days",
     "auto_trade_risk_adaptive_min_trades",
+    "auto_trade_protective_mode",
+    "auto_trade_min_hold_sec",
+    "auto_trade_reversal_confirm_cycles",
     "hedge_enabled",
     "hedge_threshold",
     "hedge_slots",
@@ -133,6 +136,78 @@ def _safe_json_loads(value):
         return json.loads(value)
     except Exception:
         return None
+
+
+def _safe_float(value, default=None):
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _normalize_trade_direction(trade_type):
+    value = str(trade_type or "").strip().lower()
+    if value in ("buy", "hedge_buy"):
+        return "buy"
+    if value in ("sell", "hedge_sell"):
+        return "sell"
+    return None
+
+
+def _derive_target_learning_fields(row, *, exit_price=None, reason=None):
+    direction = _normalize_trade_direction((row or {}).get("type"))
+    entry = _safe_float((row or {}).get("entry"), None)
+    if direction not in ("buy", "sell") or entry is None:
+        return {
+            "target_price": None,
+            "target_factor": None,
+            "target_hit": None,
+            "overshoot_before_close": None,
+            "force_close_after_target_crossed": None,
+        }
+
+    context = _safe_json_loads((row or {}).get("signal_context_json")) or {}
+    target_plan = context.get("target_plan") if isinstance(context, dict) else {}
+    if not isinstance(target_plan, dict):
+        target_plan = {}
+
+    tp_distance = _safe_float((row or {}).get("tpValue"), None)
+    target_price = _safe_float((row or {}).get("target_price"), None)
+    if target_price is None:
+        target_price = _safe_float(target_plan.get("target_price"), None)
+    if target_price is None and tp_distance is not None:
+        if direction == "buy":
+            target_price = entry + tp_distance
+        elif direction == "sell":
+            target_price = entry - tp_distance
+
+    target_factor = _safe_float((row or {}).get("target_factor"), None)
+    if target_factor is None:
+        target_factor = _safe_float(target_plan.get("adaptive_factor"), None)
+
+    price_exit = _safe_float(exit_price, _safe_float((row or {}).get("exit"), None))
+    if target_price is None or price_exit is None:
+        return {
+            "target_price": target_price,
+            "target_factor": target_factor,
+            "target_hit": None,
+            "overshoot_before_close": None,
+            "force_close_after_target_crossed": None,
+        }
+
+    crossed = price_exit >= target_price if direction == "buy" else price_exit <= target_price
+    overshoot = (price_exit - target_price) if direction == "buy" else (target_price - price_exit)
+    reason_text = str(reason if reason is not None else (row or {}).get("reason") or "").strip().lower()
+    force_close_crossed = 1 if ("force_close" in reason_text and crossed) else 0
+    target_hit = 1 if (crossed and force_close_crossed == 0) else 0
+
+    return {
+        "target_price": target_price,
+        "target_factor": target_factor,
+        "target_hit": target_hit,
+        "overshoot_before_close": overshoot,
+        "force_close_after_target_crossed": force_close_crossed,
+    }
 
 
 def get_auto_trade_risk_policy():
@@ -239,7 +314,10 @@ def init_db():
                 auto_trade_break_even_rr REAL DEFAULT 1.0,
                 auto_trade_break_even_offset_atr_mult REAL DEFAULT 0.1,
                 auto_trade_trailing_mode TEXT DEFAULT 'stateful_hl',
-                auto_trade_stateful_trail_buffer_atr_mult REAL DEFAULT 0.5
+                auto_trade_stateful_trail_buffer_atr_mult REAL DEFAULT 0.5,
+                auto_trade_protective_mode TEXT DEFAULT 'broker_sl',
+                auto_trade_min_hold_sec INTEGER DEFAULT 15,
+                auto_trade_reversal_confirm_cycles INTEGER DEFAULT 2
             )
             """
         )
@@ -288,6 +366,9 @@ def init_db():
         _add_column_if_missing(conn, "account_state", "auto_trade_break_even_offset_atr_mult", "REAL DEFAULT 0.1")
         _add_column_if_missing(conn, "account_state", "auto_trade_trailing_mode", "TEXT DEFAULT 'stateful_hl'")
         _add_column_if_missing(conn, "account_state", "auto_trade_stateful_trail_buffer_atr_mult", "REAL DEFAULT 0.5")
+        _add_column_if_missing(conn, "account_state", "auto_trade_protective_mode", "TEXT DEFAULT 'broker_sl'")
+        _add_column_if_missing(conn, "account_state", "auto_trade_min_hold_sec", "INTEGER DEFAULT 15")
+        _add_column_if_missing(conn, "account_state", "auto_trade_reversal_confirm_cycles", "INTEGER DEFAULT 2")
         conn.execute(
             """
             INSERT INTO account_state (
@@ -502,6 +583,16 @@ def init_db():
         _add_column_if_missing(conn, "trade_history", "signal_context_json", "TEXT")
         _add_column_if_missing(conn, "trade_history", "strategy_name", "TEXT")
         _add_column_if_missing(conn, "trade_history", "strategy_revision", "INTEGER")
+        _add_column_if_missing(conn, "trade_history", "target_price", "REAL")
+        _add_column_if_missing(conn, "trade_history", "target_factor", "REAL")
+        _add_column_if_missing(conn, "trade_history", "target_hit", "INTEGER")
+        _add_column_if_missing(conn, "trade_history", "overshoot_before_close", "REAL")
+        _add_column_if_missing(conn, "trade_history", "force_close_after_target_crossed", "INTEGER")
+        _add_column_if_missing(conn, "trade_history", "mfe_price_distance", "REAL")
+        _add_column_if_missing(conn, "trade_history", "mae_price_distance", "REAL")
+        _add_column_if_missing(conn, "trade_history", "time_to_close_sec", "INTEGER")
+        _add_column_if_missing(conn, "trade_history", "target_first_crossed_at", "INTEGER")
+        _add_column_if_missing(conn, "trade_history", "time_to_target_cross_sec", "INTEGER")
 
         conn.execute(
             """
@@ -650,7 +741,9 @@ def get_account_state():
                      auto_trade_partial_tp_rr2, auto_trade_partial_tp_close_pct2,
                      auto_trade_break_even_enabled,
                      auto_trade_break_even_rr, auto_trade_break_even_offset_atr_mult,
-                     auto_trade_trailing_mode, auto_trade_stateful_trail_buffer_atr_mult
+                     auto_trade_trailing_mode, auto_trade_stateful_trail_buffer_atr_mult,
+                     auto_trade_protective_mode, auto_trade_min_hold_sec,
+                     auto_trade_reversal_confirm_cycles
             FROM account_state
             WHERE id = 1
             """
@@ -708,6 +801,9 @@ def get_account_state():
                 "auto_trade_break_even_offset_atr_mult": 0.1,
                 "auto_trade_trailing_mode": "stateful_hl",
                 "auto_trade_stateful_trail_buffer_atr_mult": 0.5,
+                "auto_trade_protective_mode": "broker_sl",
+                "auto_trade_min_hold_sec": 15,
+                "auto_trade_reversal_confirm_cycles": 2,
                 "history": [],
             }
             state.update(get_auto_trade_risk_policy())
@@ -765,6 +861,9 @@ def get_account_state():
             "auto_trade_break_even_offset_atr_mult": float(row["auto_trade_break_even_offset_atr_mult"] if row["auto_trade_break_even_offset_atr_mult"] is not None else 0.1),
             "auto_trade_trailing_mode": (row["auto_trade_trailing_mode"] or "stateful_hl"),
             "auto_trade_stateful_trail_buffer_atr_mult": float(row["auto_trade_stateful_trail_buffer_atr_mult"] if row["auto_trade_stateful_trail_buffer_atr_mult"] is not None else 0.5),
+            "auto_trade_protective_mode": (row["auto_trade_protective_mode"] or "broker_sl"),
+            "auto_trade_min_hold_sec": int(row["auto_trade_min_hold_sec"] if row["auto_trade_min_hold_sec"] is not None else 15),
+            "auto_trade_reversal_confirm_cycles": int(row["auto_trade_reversal_confirm_cycles"] if row["auto_trade_reversal_confirm_cycles"] is not None else 2),
             "history": transactions,
         }
         state.update(get_auto_trade_risk_policy())
@@ -910,6 +1009,20 @@ def save_account_state(state):
                 state.get("auto_trade_stateful_trail_buffer_atr_mult", 0.5),
             ),
         )
+        conn.execute(
+            """
+            UPDATE account_state
+            SET auto_trade_protective_mode = ?,
+                auto_trade_min_hold_sec = ?,
+                auto_trade_reversal_confirm_cycles = ?
+            WHERE id = 1
+            """,
+            (
+                str(state.get("auto_trade_protective_mode", "broker_sl") or "broker_sl").strip().lower(),
+                max(0, int(state.get("auto_trade_min_hold_sec", 15) or 15)),
+                max(1, int(state.get("auto_trade_reversal_confirm_cycles", 2) or 2)),
+            ),
+        )
 
 
 def add_account_transaction(tx_type, amount, note=""):
@@ -949,9 +1062,12 @@ def append_trade_history(trade):
                 platform, execution_mode, terminal_path,
                 trailing_mode, risk_mode, signal_score, spread_points,
                 margin_usage_pct, equity, balance, atr_value, session_hour,
-                signal_context_json, strategy_name, strategy_revision
+                signal_context_json, strategy_name, strategy_revision,
+                target_price, target_factor, target_hit, overshoot_before_close,
+                force_close_after_target_crossed, mfe_price_distance, mae_price_distance,
+                time_to_close_sec, target_first_crossed_at, time_to_target_cross_sec
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade.get("trade_id"),
@@ -986,6 +1102,16 @@ def append_trade_history(trade):
                 _safe_json_dumps(trade.get("signal_context") if trade.get("signal_context") is not None else trade.get("signal_context_json")),
                 trade.get("strategy_name"),
                 trade.get("strategy_revision"),
+                trade.get("target_price"),
+                trade.get("target_factor"),
+                trade.get("target_hit"),
+                trade.get("overshoot_before_close"),
+                trade.get("force_close_after_target_crossed"),
+                trade.get("mfe_price_distance"),
+                trade.get("mae_price_distance"),
+                trade.get("time_to_close_sec"),
+                trade.get("target_first_crossed_at"),
+                trade.get("time_to_target_cross_sec"),
             ),
         )
 
@@ -1000,7 +1126,11 @@ def get_trade_history():
                    execution_mode, terminal_path,
                    trailing_mode, risk_mode, signal_score, spread_points,
                      margin_usage_pct, equity, balance, atr_value, session_hour,
-                     signal_context_json, strategy_name, strategy_revision
+                                         signal_context_json, strategy_name, strategy_revision,
+                                         target_price, target_factor, target_hit, overshoot_before_close,
+                                         force_close_after_target_crossed, mfe_price_distance,
+                                         mae_price_distance, time_to_close_sec, target_first_crossed_at,
+                                         time_to_target_cross_sec
             FROM trade_history
             ORDER BY entryTime ASC, id ASC
             """
@@ -1039,6 +1169,16 @@ def get_trade_history():
                 "signal_context": _safe_json_loads(row["signal_context_json"]),
                 "strategy_name": row["strategy_name"],
                 "strategy_revision": row["strategy_revision"],
+                "target_price": row["target_price"],
+                "target_factor": row["target_factor"],
+                "target_hit": row["target_hit"],
+                "overshoot_before_close": row["overshoot_before_close"],
+                "force_close_after_target_crossed": row["force_close_after_target_crossed"],
+                "mfe_price_distance": row["mfe_price_distance"],
+                "mae_price_distance": row["mae_price_distance"],
+                "time_to_close_sec": row["time_to_close_sec"],
+                "target_first_crossed_at": row["target_first_crossed_at"],
+                "time_to_target_cross_sec": row["time_to_target_cross_sec"],
             }
             for row in rows
         ]
@@ -1055,18 +1195,25 @@ def create_trade_open_record(trade):
                 execution_mode, terminal_path,
                 trailing_mode, risk_mode, signal_score, spread_points,
                 margin_usage_pct, equity, balance, atr_value, session_hour,
-                signal_context_json, strategy_name, strategy_revision
+                signal_context_json, strategy_name, strategy_revision,
+                target_price, target_factor, target_hit, overshoot_before_close,
+                force_close_after_target_crossed, mfe_price_distance, mae_price_distance,
+                time_to_close_sec, target_first_crossed_at, time_to_target_cross_sec
             )
-            VALUES (?, 'open', ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade.get("trade_id"),
+                "open",
                 trade.get("type"),
                 trade.get("symbol"),
                 trade.get("lot"),
                 trade.get("ticket"),
                 trade.get("entry"),
+                None,
+                None,
                 trade.get("entryTime"),
+                None,
                 trade.get("reason", "open"),
                 trade.get("tpValue"),
                 trade.get("slValue"),
@@ -1088,6 +1235,16 @@ def create_trade_open_record(trade):
                 _safe_json_dumps(trade.get("signal_context") if trade.get("signal_context") is not None else trade.get("signal_context_json")),
                 trade.get("strategy_name"),
                 trade.get("strategy_revision"),
+                trade.get("target_price"),
+                trade.get("target_factor"),
+                trade.get("target_hit"),
+                trade.get("overshoot_before_close"),
+                trade.get("force_close_after_target_crossed"),
+                trade.get("mfe_price_distance"),
+                trade.get("mae_price_distance"),
+                trade.get("time_to_close_sec"),
+                trade.get("target_first_crossed_at"),
+                trade.get("time_to_target_cross_sec"),
             ),
         )
 
@@ -1187,7 +1344,17 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                     session_hour = CASE WHEN ? IS NULL THEN session_hour ELSE ? END,
                     signal_context_json = COALESCE(?, signal_context_json),
                     strategy_name = COALESCE(?, strategy_name),
-                    strategy_revision = COALESCE(?, strategy_revision)
+                    strategy_revision = COALESCE(?, strategy_revision),
+                    target_price = CASE WHEN ? IS NULL THEN target_price ELSE ? END,
+                    target_factor = CASE WHEN ? IS NULL THEN target_factor ELSE ? END,
+                    target_hit = CASE WHEN ? IS NULL THEN target_hit ELSE ? END,
+                    overshoot_before_close = CASE WHEN ? IS NULL THEN overshoot_before_close ELSE ? END,
+                    force_close_after_target_crossed = CASE WHEN ? IS NULL THEN force_close_after_target_crossed ELSE ? END,
+                    mfe_price_distance = CASE WHEN ? IS NULL THEN mfe_price_distance ELSE ? END,
+                    mae_price_distance = CASE WHEN ? IS NULL THEN mae_price_distance ELSE ? END,
+                    time_to_close_sec = CASE WHEN ? IS NULL THEN time_to_close_sec ELSE ? END,
+                    target_first_crossed_at = CASE WHEN ? IS NULL THEN target_first_crossed_at ELSE ? END,
+                    time_to_target_cross_sec = CASE WHEN ? IS NULL THEN time_to_target_cross_sec ELSE ? END
                 WHERE id = ?
                 """,
                 (
@@ -1235,6 +1402,26 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                     _safe_json_dumps(trade.get("signal_context") if trade.get("signal_context") is not None else trade.get("signal_context_json")),
                     trade.get("strategy_name"),
                     trade.get("strategy_revision"),
+                    trade.get("target_price"),
+                    trade.get("target_price"),
+                    trade.get("target_factor"),
+                    trade.get("target_factor"),
+                    trade.get("target_hit"),
+                    trade.get("target_hit"),
+                    trade.get("overshoot_before_close"),
+                    trade.get("overshoot_before_close"),
+                    trade.get("force_close_after_target_crossed"),
+                    trade.get("force_close_after_target_crossed"),
+                    trade.get("mfe_price_distance"),
+                    trade.get("mfe_price_distance"),
+                    trade.get("mae_price_distance"),
+                    trade.get("mae_price_distance"),
+                    trade.get("time_to_close_sec"),
+                    trade.get("time_to_close_sec"),
+                    trade.get("target_first_crossed_at"),
+                    trade.get("target_first_crossed_at"),
+                    trade.get("time_to_target_cross_sec"),
+                    trade.get("time_to_target_cross_sec"),
                     row["id"],
                 ),
             )
@@ -1249,9 +1436,12 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                 platform, execution_mode, terminal_path,
                 trailing_mode, risk_mode, signal_score, spread_points,
                 margin_usage_pct, equity, balance, atr_value, session_hour,
-                signal_context_json, strategy_name, strategy_revision
+                signal_context_json, strategy_name, strategy_revision,
+                target_price, target_factor, target_hit, overshoot_before_close,
+                force_close_after_target_crossed, mfe_price_distance, mae_price_distance,
+                time_to_close_sec, target_first_crossed_at, time_to_target_cross_sec
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade_id,
@@ -1286,6 +1476,16 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
                 _safe_json_dumps(trade.get("signal_context") if trade.get("signal_context") is not None else trade.get("signal_context_json")),
                 trade.get("strategy_name"),
                 trade.get("strategy_revision"),
+                trade.get("target_price"),
+                trade.get("target_factor"),
+                trade.get("target_hit"),
+                trade.get("overshoot_before_close"),
+                trade.get("force_close_after_target_crossed"),
+                trade.get("mfe_price_distance"),
+                trade.get("mae_price_distance"),
+                trade.get("time_to_close_sec"),
+                trade.get("target_first_crossed_at"),
+                trade.get("time_to_target_cross_sec"),
             ),
         )
         return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
@@ -1309,7 +1509,11 @@ def get_recent_closed_trades(limit=20, broker_id=None, account_id=None):
                    broker_name, account_id, platform, execution_mode,
                    terminal_path, trailing_mode, risk_mode, signal_score,
                    spread_points, margin_usage_pct, equity, balance, atr_value,
-                   session_hour, signal_context_json
+                       session_hour, signal_context_json,
+                       target_price, target_factor, target_hit, overshoot_before_close,
+                       force_close_after_target_crossed, mfe_price_distance,
+                       mae_price_distance, time_to_close_sec, target_first_crossed_at,
+                       time_to_target_cross_sec
             FROM trade_history
             WHERE {' AND '.join(clauses)}
             ORDER BY COALESCE(exitTime, entryTime, 0) DESC, id DESC
@@ -1348,13 +1552,49 @@ def get_recent_closed_trades(limit=20, broker_id=None, account_id=None):
             "atr_value": row["atr_value"],
             "session_hour": row["session_hour"],
             "signal_context": _safe_json_loads(row["signal_context_json"]),
+            "target_price": row["target_price"],
+            "target_factor": row["target_factor"],
+            "target_hit": row["target_hit"],
+            "overshoot_before_close": row["overshoot_before_close"],
+            "force_close_after_target_crossed": row["force_close_after_target_crossed"],
+            "mfe_price_distance": row["mfe_price_distance"],
+            "mae_price_distance": row["mae_price_distance"],
+            "time_to_close_sec": row["time_to_close_sec"],
+            "target_first_crossed_at": row["target_first_crossed_at"],
+            "time_to_target_cross_sec": row["time_to_target_cross_sec"],
         }
         for row in rows
     ]
 
 
-def close_trade_record(trade_id, *, exit_price=None, profit=None, exit_time=None, ticket=None, reason="close"):
+def close_trade_record(trade_id, *, exit_price=None, profit=None, exit_time=None, ticket=None, reason="close", runtime_metrics=None):
     with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT trade_id, type, entry, exit, reason, tpValue, target_price, target_factor,
+                   signal_context_json, entryTime, target_first_crossed_at
+            FROM trade_history
+            WHERE trade_id = ? AND status = 'open'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (trade_id,),
+        ).fetchone()
+        target_fields = _derive_target_learning_fields(dict(row) if row else {}, exit_price=exit_price, reason=reason)
+        metrics = dict(runtime_metrics or {})
+        close_ts = int(exit_time or time.time())
+        row_map = dict(row) if row else {}
+        entry_ts = int(row_map.get("entryTime") or 0)
+        first_crossed_at = metrics.get("target_first_crossed_at")
+        if first_crossed_at is None:
+            first_crossed_at = row_map.get("target_first_crossed_at")
+        if first_crossed_at is not None:
+            try:
+                first_crossed_at = int(first_crossed_at)
+            except Exception:
+                first_crossed_at = None
+        time_to_close_sec = max(0, close_ts - entry_ts) if entry_ts > 0 else None
+        time_to_target_cross_sec = max(0, first_crossed_at - entry_ts) if (entry_ts > 0 and first_crossed_at is not None) else None
         conn.execute(
             """
             UPDATE trade_history
@@ -1363,10 +1603,47 @@ def close_trade_record(trade_id, *, exit_price=None, profit=None, exit_time=None
                 profit = COALESCE(?, profit),
                 exitTime = COALESCE(?, exitTime),
                 ticket = COALESCE(?, ticket),
-                reason = ?
+                reason = ?,
+                target_price = CASE WHEN ? IS NULL THEN target_price ELSE ? END,
+                target_factor = CASE WHEN ? IS NULL THEN target_factor ELSE ? END,
+                target_hit = CASE WHEN ? IS NULL THEN target_hit ELSE ? END,
+                overshoot_before_close = CASE WHEN ? IS NULL THEN overshoot_before_close ELSE ? END,
+                force_close_after_target_crossed = CASE WHEN ? IS NULL THEN force_close_after_target_crossed ELSE ? END,
+                mfe_price_distance = CASE WHEN ? IS NULL THEN mfe_price_distance ELSE ? END,
+                mae_price_distance = CASE WHEN ? IS NULL THEN mae_price_distance ELSE ? END,
+                time_to_close_sec = CASE WHEN ? IS NULL THEN time_to_close_sec ELSE ? END,
+                target_first_crossed_at = CASE WHEN ? IS NULL THEN target_first_crossed_at ELSE ? END,
+                time_to_target_cross_sec = CASE WHEN ? IS NULL THEN time_to_target_cross_sec ELSE ? END
             WHERE trade_id = ? AND status = 'open'
             """,
-            (exit_price, profit, exit_time or int(time.time()), ticket, reason, trade_id),
+            (
+                exit_price,
+                profit,
+                close_ts,
+                ticket,
+                reason,
+                target_fields.get("target_price"),
+                target_fields.get("target_price"),
+                target_fields.get("target_factor"),
+                target_fields.get("target_factor"),
+                target_fields.get("target_hit"),
+                target_fields.get("target_hit"),
+                target_fields.get("overshoot_before_close"),
+                target_fields.get("overshoot_before_close"),
+                target_fields.get("force_close_after_target_crossed"),
+                target_fields.get("force_close_after_target_crossed"),
+                metrics.get("mfe_price_distance"),
+                metrics.get("mfe_price_distance"),
+                metrics.get("mae_price_distance"),
+                metrics.get("mae_price_distance"),
+                time_to_close_sec,
+                time_to_close_sec,
+                first_crossed_at,
+                first_crossed_at,
+                time_to_target_cross_sec,
+                time_to_target_cross_sec,
+                trade_id,
+            ),
         )
 
 
@@ -1378,7 +1655,9 @@ def list_open_trades(broker_id=None):
                 SELECT trade_id, type, symbol, lot, ticket, entry, entryTime,
                       tpValue, slValue, broker_id, broker_name, account_id, platform,
                       execution_mode, terminal_path, risk_mode, signal_score,
-                      margin_usage_pct, equity, balance, spread_points
+                        margin_usage_pct, equity, balance, spread_points,
+                                                atr_value, session_hour, signal_context_json,
+                                                target_price, target_factor
                 FROM trade_history
                 WHERE status = 'open'
                 ORDER BY entryTime ASC, id ASC
@@ -1390,7 +1669,9 @@ def list_open_trades(broker_id=None):
                 SELECT trade_id, type, symbol, lot, ticket, entry, entryTime,
                       tpValue, slValue, broker_id, broker_name, account_id, platform,
                       execution_mode, terminal_path, risk_mode, signal_score,
-                      margin_usage_pct, equity, balance, spread_points
+                        margin_usage_pct, equity, balance, spread_points,
+                                                atr_value, session_hour, signal_context_json,
+                                                target_price, target_factor
                 FROM trade_history
                 WHERE status = 'open' AND broker_id = ?
                 ORDER BY entryTime ASC, id ASC
@@ -1420,6 +1701,11 @@ def list_open_trades(broker_id=None):
             "equity": row["equity"],
             "balance": row["balance"],
             "spread_points": row["spread_points"],
+            "atr_value": row["atr_value"],
+            "session_hour": row["session_hour"],
+            "signal_context": _safe_json_loads(row["signal_context_json"]),
+            "target_price": row["target_price"],
+            "target_factor": row["target_factor"],
         }
         for row in rows
     ]
@@ -1855,7 +2141,11 @@ def get_auto_trade_statistics(window_days=30, broker_id=None, account_id=None):
             SELECT trade_id, type, symbol, lot, ticket, entry, exit, profit, entryTime, exitTime,
                    reason, tpValue, slValue, broker_id, broker_name, account_id, platform,
                    execution_mode, terminal_path, trailing_mode, risk_mode, signal_score,
-                   spread_points, margin_usage_pct, equity, balance, atr_value, session_hour
+                     spread_points, margin_usage_pct, equity, balance, atr_value, session_hour,
+                     target_price, target_factor, target_hit, overshoot_before_close,
+                                         force_close_after_target_crossed, mfe_price_distance,
+                                         mae_price_distance, time_to_close_sec, target_first_crossed_at,
+                                         time_to_target_cross_sec
             FROM trade_history
             WHERE {' AND '.join(clauses)}
             ORDER BY COALESCE(exitTime, entryTime, 0) ASC, id ASC
@@ -1883,6 +2173,16 @@ def get_auto_trade_statistics(window_days=30, broker_id=None, account_id=None):
         "055_060": {"count": 0, "wins": 0},
         "060_070": {"count": 0, "wins": 0},
         "gte_070": {"count": 0, "wins": 0},
+    }
+    target_summary = {
+        "evaluated": 0,
+        "target_hit": 0,
+        "missed_target": 0,
+        "force_close_after_target_crossed": 0,
+        "overshoot_sum": 0.0,
+        "overshoot_count": 0,
+        "target_factor_sum": 0.0,
+        "target_factor_count": 0,
     }
 
     for row in closed_trades:
@@ -1972,6 +2272,28 @@ def get_auto_trade_statistics(window_days=30, broker_id=None, account_id=None):
             if profit > 0:
                 bucket["wins"] += 1
 
+        target_price = _safe_float(row.get("target_price"), None)
+        target_hit = row.get("target_hit")
+        force_cross = row.get("force_close_after_target_crossed")
+        if target_hit is not None or force_cross is not None or target_price is not None:
+            target_summary["evaluated"] += 1
+            if int(target_hit or 0) == 1:
+                target_summary["target_hit"] += 1
+            if int(force_cross or 0) == 1:
+                target_summary["force_close_after_target_crossed"] += 1
+            if int(target_hit or 0) == 0 and int(force_cross or 0) == 0:
+                target_summary["missed_target"] += 1
+
+        overshoot = _safe_float(row.get("overshoot_before_close"), None)
+        if overshoot is not None:
+            target_summary["overshoot_sum"] += overshoot
+            target_summary["overshoot_count"] += 1
+
+        target_factor = _safe_float(row.get("target_factor"), None)
+        if target_factor is not None:
+            target_summary["target_factor_sum"] += target_factor
+            target_summary["target_factor_count"] += 1
+
     analysis_events = [e for e in events if e.get("event_type") == "analysis"]
     blocked_events = [e for e in events if e.get("event_type") == "blocked"]
     spread_blocks = [e for e in blocked_events if e.get("reason") == "spread_too_high"]
@@ -1986,6 +2308,39 @@ def get_auto_trade_statistics(window_days=30, broker_id=None, account_id=None):
     for event in spread_blocks:
         broker = event.get("broker_name") or "-"
         spread_block_by_broker[broker] = spread_block_by_broker.get(broker, 0) + 1
+
+    anomaly_rows = []
+    for row in reversed(closed_trades):
+        first_crossed_at = _safe_float(row.get("target_first_crossed_at"), None)
+        reason_text = str(row.get("reason") or "").strip().lower()
+        if first_crossed_at is None or first_crossed_at <= 0:
+            continue
+        if "tp" in reason_text or "take_profit" in reason_text:
+            continue
+        anomaly_rows.append(
+            {
+                "trade_id": row.get("trade_id"),
+                "symbol": row.get("symbol"),
+                "type": row.get("type"),
+                "reason": row.get("reason"),
+                "profit": row.get("profit"),
+                "entry": row.get("entry"),
+                "exit": row.get("exit"),
+                "entryTime": row.get("entryTime"),
+                "exitTime": row.get("exitTime"),
+                "target_price": row.get("target_price"),
+                "target_hit": row.get("target_hit"),
+                "force_close_after_target_crossed": row.get("force_close_after_target_crossed"),
+                "overshoot_before_close": row.get("overshoot_before_close"),
+                "mfe_price_distance": row.get("mfe_price_distance"),
+                "mae_price_distance": row.get("mae_price_distance"),
+                "time_to_close_sec": row.get("time_to_close_sec"),
+                "target_first_crossed_at": row.get("target_first_crossed_at"),
+                "time_to_target_cross_sec": row.get("time_to_target_cross_sec"),
+            }
+        )
+        if len(anomaly_rows) >= 20:
+            break
 
     return {
         "window_days": window_days,
@@ -2078,6 +2433,19 @@ def get_auto_trade_statistics(window_days=30, broker_id=None, account_id=None):
             key=lambda item: item["count"],
             reverse=True,
         ),
+        "target_outcome": {
+            "evaluated": target_summary["evaluated"],
+            "target_hit": target_summary["target_hit"],
+            "missed_target": target_summary["missed_target"],
+            "force_close_after_target_crossed": target_summary["force_close_after_target_crossed"],
+            "target_hit_rate": (target_summary["target_hit"] / target_summary["evaluated"] * 100.0) if target_summary["evaluated"] else 0.0,
+            "average_overshoot_before_close": (target_summary["overshoot_sum"] / target_summary["overshoot_count"]) if target_summary["overshoot_count"] else None,
+            "average_target_factor": (target_summary["target_factor_sum"] / target_summary["target_factor_count"]) if target_summary["target_factor_count"] else None,
+        },
+        "anomaly_audit": {
+            "count": len(anomaly_rows),
+            "rows": anomaly_rows,
+        },
     }
 
 

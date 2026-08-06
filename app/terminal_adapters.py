@@ -81,7 +81,7 @@ def _log_mt5_error_throttled(message, *, broker_id=None, broker_name=None, accou
 class TerminalAdapter:
     terminal_type = "simulation"
 
-    def open_trade(self, symbol: str, lot: float, trade_type: str):
+    def open_trade(self, symbol: str, lot: float, trade_type: str, tp: float = None, sl: float = None):
         raise NotImplementedError
 
     def close_trade(self, symbol: str, lot: float, ticket: int):
@@ -279,7 +279,7 @@ class MouseAdapter(TerminalAdapter):
     def __init__(self, window_hint: Optional[str]):
         self.window_hint = window_hint or "FinexBisnisSolusi"
 
-    def open_trade(self, symbol: str, lot: float, trade_type: str):
+    def open_trade(self, symbol: str, lot: float, trade_type: str, tp: float = None, sl: float = None):
         proc = subprocess.run(
             [
                 "python",
@@ -298,9 +298,20 @@ class MouseAdapter(TerminalAdapter):
 class SimulationAdapter(TerminalAdapter):
     terminal_type = "simulation"
 
-    def open_trade(self, symbol: str, lot: float, trade_type: str):
+    def open_trade(self, symbol: str, lot: float, trade_type: str, tp: float = None, sl: float = None):
         price = 2000.0
-        return {"status": "ok", "order": {"ticket": int(time.time()), "price": price, "symbol": symbol, "volume": lot, "type": trade_type}}
+        return {
+            "status": "ok",
+            "order": {
+                "ticket": int(time.time()),
+                "price": price,
+                "symbol": symbol,
+                "volume": lot,
+                "type": trade_type,
+                "tp": tp,
+                "sl": sl,
+            },
+        }
 
     def close_trade(self, symbol: str, lot: float, ticket: int):
         price = 2000.0

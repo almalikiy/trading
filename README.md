@@ -35,3 +35,23 @@ Aplikasi web untuk memberikan sinyal trading open/buy pada XAUUSD atau simbol la
 - Pastikan MT5 berjalan dan dapat diakses dari backend
 - Ganti parameter trading sesuai kebutuhan di web
 - Simulator hanya ilustrasi, bukan jaminan profit
+
+## TODO Best-Practice (Updated)
+- [x] Tambahkan mode proteksi eksekusi order: `engine_only`, `broker_sl`, `broker_tpsl`.
+- [x] Terapkan fail-safe broker-side proteksi saat open trade (minimum hard SL ketika mode `broker_sl` atau `broker_tpsl`).
+- [x] Tambahkan reversal close guard dengan konfirmasi multi-siklus agar tidak mudah whipsaw.
+- [x] Tambahkan minimum hold time sebelum close akibat reversal.
+- [x] Simpan close reason terklasifikasi (`auto_close_tp`, `auto_close_sl`, `auto_close_reversal_confirmed`) untuk audit/ML.
+- [x] Tambahkan MFE/MAE dan time-to-event (`time_to_target_cross`, `time_to_close`) untuk label ML lanjutan.
+- [x] Tambahkan dashboard anomali operasional (mis. target crossed tapi force close).
+- [x] Pisahkan dataset model open-decision vs close-decision (anti leakage).
+
+## Parameter Auto-Trade Baru
+- `auto_trade_protective_mode`: `engine_only` | `broker_sl` | `broker_tpsl`
+- `auto_trade_min_hold_sec`: minimum durasi posisi sebelum boleh close reversal
+- `auto_trade_reversal_confirm_cycles`: jumlah siklus sinyal berlawanan sebelum close reversal dieksekusi
+
+Rekomendasi default produksi:
+- `auto_trade_protective_mode=broker_sl`
+- `auto_trade_min_hold_sec=15`
+- `auto_trade_reversal_confirm_cycles=2`

@@ -60,6 +60,8 @@ export default function AdaptiveInsights() {
   const [stats, setStats] = useState(null);
   const [loadingEvents, setLoadingEvents] = useState(true);
   const [loadingStats, setLoadingStats] = useState(true);
+  const [closeDataset, setCloseDataset] = useState([]);
+  const [loadingCloseDataset, setLoadingCloseDataset] = useState(true);
   const [error, setError] = useState("");
 
   const [brokerId, setBrokerId] = useState("");
@@ -129,6 +131,28 @@ export default function AdaptiveInsights() {
     }
   };
 
+  const refreshCloseDataset = async () => {
+    setLoadingCloseDataset(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("limit", "120");
+      if (brokerId) params.set("broker_id", String(brokerId));
+      if (accountId) params.set("account_id", String(accountId));
+      const res = await fetch(`${API_BASE}/account/auto_trade_close_decision_dataset?${params.toString()}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.status === "error") {
+        throw new Error(data.message || "Gagal mengambil close-decision dataset.");
+      }
+      setCloseDataset(Array.isArray(data.dataset) ? data.dataset : []);
+      setError("");
+    } catch (err) {
+      setCloseDataset([]);
+      setError(String(err.message || "Gagal mengambil close-decision dataset."));
+    } finally {
+      setLoadingCloseDataset(false);
+    }
+  };
+
   useEffect(() => {
     refreshBrokers();
   }, []);
@@ -136,12 +160,14 @@ export default function AdaptiveInsights() {
   useEffect(() => {
     refreshEvents();
     refreshStats();
+    refreshCloseDataset();
   }, [brokerId, accountId, sinceMinutes, windowDays]);
 
   useEffect(() => {
     const timer = setInterval(() => {
       refreshEvents();
       refreshStats();
+      refreshCloseDataset();
     }, 10000);
     return () => clearInterval(timer);
   }, [brokerId, accountId, sinceMinutes, windowDays]);
@@ -267,6 +293,127 @@ export default function AdaptiveInsights() {
           </Paper>
         </Grid>
       </Grid>
+
+      <Grid container spacing={1.5} sx={{ mb: 2 }}>
+        <Grid item xs={6} md={3}>
+          <Paper sx={{ p: 1.5 }}>
+            <Typography variant="caption" color="text.secondary">Target Hit</Typography>
+            <Typography variant="h6">{loadingStats ? "-" : Number(stats?.target_outcome?.target_hit || 0)}</Typography>
+          </Paper>
+        </Grid>
+        <Grid item xs={6} md={3}>
+          <Paper sx={{ p: 1.5 }}>
+            <Typography variant="caption" color="text.secondary">Missed Target</Typography>
+            <Typography variant="h6">{loadingStats ? "-" : Number(stats?.target_outcome?.missed_target || 0)}</Typography>
+          </Paper>
+        </Grid>
+        <Grid item xs={6} md={3}>
+          <Paper sx={{ p: 1.5 }}>
+            <Typography variant="caption" color="text.secondary">Force Close After Crossed</Typography>
+            <Typography variant="h6" color="warning.main">{loadingStats ? "-" : Number(stats?.target_outcome?.force_close_after_target_crossed || 0)}</Typography>
+          </Paper>
+        </Grid>
+        <Grid item xs={6} md={3}>
+          <Paper sx={{ p: 1.5 }}>
+            <Typography variant="caption" color="text.secondary">Target Hit Rate</Typography>
+            <Typography variant="h6">{loadingStats ? "-" : `${Number(stats?.target_outcome?.target_hit_rate || 0).toFixed(1)}%`}</Typography>
+          </Paper>
+        </Grid>
+      </Grid>
+
+      <Paper sx={{ p: { xs: 1.5, sm: 2 }, mb: 2 }}>
+        <Typography variant="subtitle1" sx={{ mb: 1 }}>Adaptive Target Learning Metrics</Typography>
+        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
+          <Chip
+            color="info"
+            label={`Avg Target Factor: ${stats?.target_outcome?.average_target_factor == null ? "-" : Number(stats.target_outcome.average_target_factor).toFixed(3)}`}
+          />
+          <Chip
+            color="warning"
+            label={`Avg Overshoot Before Close: ${stats?.target_outcome?.average_overshoot_before_close == null ? "-" : Number(stats.target_outcome.average_overshoot_before_close).toFixed(3)}`}
+          />
+          <Chip
+            variant="outlined"
+            label={`Evaluated Trades: ${Number(stats?.target_outcome?.evaluated || 0)}`}
+          />
+        </Box>
+      </Paper>
+
+      <Paper sx={{ p: { xs: 1.5, sm: 2 }, mb: 2, overflowX: "auto" }}>
+        <Typography variant="subtitle1" sx={{ mb: 1 }}>Anomaly Audit: Target Crossed But Not TP Close</Typography>
+        {loadingStats ? (
+          <Box sx={{ py: 2, display: "flex", justifyContent: "center" }}><CircularProgress size={20} /></Box>
+        ) : !Array.isArray(stats?.anomaly_audit?.rows) || stats.anomaly_audit.rows.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">Belum ada anomaly target-crossed pada periode ini.</Typography>
+        ) : (
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Close Time</TableCell>
+                  <TableCell>Trade</TableCell>
+                  <TableCell>Reason</TableCell>
+                  <TableCell>Target Crossed</TableCell>
+                  <TableCell>Close Delay</TableCell>
+                  <TableCell>Overshoot</TableCell>
+                  <TableCell>Profit</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {stats.anomaly_audit.rows.map((row, index) => (
+                  <TableRow key={`${row.trade_id || "trade"}-${index}`}>
+                    <TableCell>{formatTradeTime(row.exitTime)}</TableCell>
+                    <TableCell>{`${row.symbol || "-"} ${row.type || "-"}`}</TableCell>
+                    <TableCell>{row.reason || "-"}</TableCell>
+                    <TableCell>{formatTradeTime(row.target_first_crossed_at)}</TableCell>
+                    <TableCell>{row.time_to_target_cross_sec == null || row.time_to_close_sec == null ? "-" : `${Math.max(0, Number(row.time_to_close_sec || 0) - Number(row.time_to_target_cross_sec || 0))}s`}</TableCell>
+                    <TableCell>{row.overshoot_before_close == null ? "-" : Number(row.overshoot_before_close).toFixed(3)}</TableCell>
+                    <TableCell sx={{ color: Number(row.profit || 0) >= 0 ? "success.main" : "error.main" }}>{Number(row.profit || 0).toFixed(2)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </Paper>
+
+      <Paper sx={{ p: { xs: 1.5, sm: 2 }, mb: 2, overflowX: "auto" }}>
+        <Typography variant="subtitle1" sx={{ mb: 1 }}>Close-Decision Dataset Preview</Typography>
+        {loadingCloseDataset ? (
+          <Box sx={{ py: 2, display: "flex", justifyContent: "center" }}><CircularProgress size={20} /></Box>
+        ) : closeDataset.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">Belum ada data close-decision yang bisa dipreview.</Typography>
+        ) : (
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Trade</TableCell>
+                  <TableCell>Close Family</TableCell>
+                  <TableCell>MFE</TableCell>
+                  <TableCell>MAE</TableCell>
+                  <TableCell>Time To Close</TableCell>
+                  <TableCell>Time To Target</TableCell>
+                  <TableCell>Target Crossed</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {closeDataset.slice(0, 20).map((row, index) => (
+                  <TableRow key={`${row.trade_id || "trade"}-${index}`}>
+                    <TableCell>{`${row.symbol || "-"} / ${row.risk_mode || "-"}`}</TableCell>
+                    <TableCell>{row.result?.close_reason_family || "-"}</TableCell>
+                    <TableCell>{Number(row.result?.mfe_price_distance || 0).toFixed(3)}</TableCell>
+                    <TableCell>{Number(row.result?.mae_price_distance || 0).toFixed(3)}</TableCell>
+                    <TableCell>{`${Number(row.result?.time_to_close_sec || 0)}s`}</TableCell>
+                    <TableCell>{row.result?.time_to_target_cross_sec ? `${Number(row.result.time_to_target_cross_sec)}s` : "-"}</TableCell>
+                    <TableCell>{row.result?.target_crossed_before_close ? "Yes" : "No"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </Paper>
 
       <Paper sx={{ p: { xs: 1.5, sm: 2 }, mb: 2 }}>
         <Typography variant="subtitle1" sx={{ mb: 1 }}>Recommendation Source Mix</Typography>

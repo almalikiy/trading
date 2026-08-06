@@ -25,6 +25,9 @@ FEATURE_COLUMNS = [
     "balance",
     "equity",
     "session_time",
+    "target_factor",
+    "target_hit",
+    "overshoot_before_close",
 ]
 
 _MODEL_LOCK = threading.Lock()
@@ -62,6 +65,19 @@ def _normalize_mode(value):
     return mode if mode in RISK_MODES else "fixed_lot"
 
 
+def _close_reason_family(reason):
+    text = str(reason or "").strip().lower()
+    if "tp" in text or "take_profit" in text:
+        return "tp"
+    if "sl" in text or "stop_loss" in text:
+        return "sl"
+    if "reversal" in text:
+        return "reversal"
+    if "partial" in text:
+        return "partial"
+    return "other"
+
+
 def _feature_vector(features):
     return [
         _safe_float(features.get("atr") or features.get("ATR"), 0.0),
@@ -71,6 +87,9 @@ def _feature_vector(features):
         _safe_float(features.get("balance"), 0.0),
         _safe_float(features.get("equity"), 0.0),
         _safe_float(features.get("session_time"), 0.0),
+        _safe_float(features.get("target_factor"), 1.0),
+        _safe_float(features.get("target_hit"), 0.0),
+        _safe_float(features.get("overshoot_before_close"), 0.0),
     ]
 
 
@@ -85,6 +104,9 @@ def log_trade(trade, features=None, result=None):
     payload["margin_usage_pct"] = feature_map.get("margin_usage_pct")
     payload["balance"] = feature_map.get("balance") if feature_map.get("balance") is not None else result_map.get("balance")
     payload["equity"] = feature_map.get("equity") if feature_map.get("equity") is not None else result_map.get("equity")
+    payload["target_factor"] = feature_map.get("target_factor")
+    payload["target_hit"] = feature_map.get("target_hit")
+    payload["overshoot_before_close"] = feature_map.get("overshoot_before_close")
 
     session_time = feature_map.get("session_time")
     if session_time is None:
@@ -115,7 +137,11 @@ def get_dataset(limit: int = 2000):
             """
             SELECT trade_id, symbol, risk_mode, profit, status, entryTime, exitTime,
                    atr_value, spread_points, signal_score, margin_usage_pct,
-                   balance, equity, session_hour
+                     balance, equity, session_hour,
+                     target_factor, target_hit, overshoot_before_close,
+                                         force_close_after_target_crossed, mfe_price_distance,
+                                         mae_price_distance, time_to_close_sec, target_first_crossed_at,
+                                         time_to_target_cross_sec
             FROM trade_history
             WHERE risk_mode IS NOT NULL
               AND TRIM(risk_mode) != ''
@@ -135,16 +161,113 @@ def get_dataset(limit: int = 2000):
             "balance": _safe_float(row["balance"], 0.0),
             "equity": _safe_float(row["equity"], 0.0),
             "session_time": _safe_float(row["session_hour"], _session_hour_from_epoch(row["entryTime"])),
+            "target_factor": _safe_float(row["target_factor"], 1.0),
+            "target_hit": _safe_float(row["target_hit"], 0.0),
+            "overshoot_before_close": _safe_float(row["overshoot_before_close"], 0.0),
         }
+        force_cross = _safe_int(row["force_close_after_target_crossed"], 0)
+        target_hit = _safe_int(row["target_hit"], 0)
+        target_quality = 1.0
+        if force_cross == 1:
+            target_quality = 0.0
+        elif target_hit == 1:
+            target_quality = 1.0
+        elif row["target_hit"] is not None:
+            target_quality = 0.25
+
+        adjusted_profit = _safe_float(row["profit"], 0.0)
+        overshoot = _safe_float(row["overshoot_before_close"], 0.0)
+        if force_cross == 1:
+            adjusted_profit -= abs(overshoot) * 0.5
+
         result = {
-            "profit": _safe_float(row["profit"], 0.0),
+            "profit": adjusted_profit,
             "status": row["status"],
-            "win": _safe_float(row["profit"], 0.0) > 0,
+            "win": adjusted_profit > 0,
+            "target_quality": target_quality,
+            "target_hit": bool(target_hit),
+            "force_close_after_target_crossed": bool(force_cross),
+            "mfe_price_distance": _safe_float(row["mfe_price_distance"], 0.0),
+            "mae_price_distance": _safe_float(row["mae_price_distance"], 0.0),
+            "time_to_close_sec": _safe_int(row["time_to_close_sec"], 0),
+            "target_first_crossed_at": _safe_int(row["target_first_crossed_at"], 0),
+            "time_to_target_cross_sec": _safe_int(row["time_to_target_cross_sec"], 0),
         }
         dataset.append(
             {
                 "trade_id": row["trade_id"],
                 "symbol": row["symbol"],
+                "risk_mode": _normalize_mode(row["risk_mode"]),
+                "features": features,
+                "result": result,
+            }
+        )
+    return dataset
+
+
+def get_close_decision_dataset(limit: int = 2000, broker_id=None, account_id=None):
+    safe_limit = max(10, min(int(limit or 2000), 100000))
+    with get_db() as conn:
+        clauses = ["status = 'closed'"]
+        params = []
+        if broker_id is not None:
+            clauses.append("COALESCE(broker_id, -1) = ?")
+            params.append(int(broker_id))
+        if account_id is not None:
+            clauses.append("COALESCE(account_id, -1) = ?")
+            params.append(int(account_id))
+        rows = conn.execute(
+            f"""
+            SELECT trade_id, symbol, risk_mode, profit, status, entryTime, exitTime, reason,
+                   broker_id, account_id,
+                   atr_value, spread_points, signal_score, margin_usage_pct,
+                   balance, equity, session_hour, target_price, target_factor,
+                   overshoot_before_close, force_close_after_target_crossed,
+                   mfe_price_distance, mae_price_distance, time_to_close_sec,
+                   target_first_crossed_at, time_to_target_cross_sec
+            FROM trade_history
+            WHERE {' AND '.join(clauses)}
+            ORDER BY COALESCE(exitTime, entryTime, 0) DESC, id DESC
+            LIMIT ?
+            """,
+            (*params, safe_limit),
+        ).fetchall()
+
+    dataset = []
+    for row in rows:
+        target_crossed_before_close = _safe_int(row["target_first_crossed_at"], 0) > 0
+        features = {
+            "atr": _safe_float(row["atr_value"], 0.0),
+            "spread_points": _safe_float(row["spread_points"], 0.0),
+            "signal_score": _safe_float(row["signal_score"], 0.0),
+            "margin_usage_pct": _safe_float(row["margin_usage_pct"], 0.0),
+            "balance": _safe_float(row["balance"], 0.0),
+            "equity": _safe_float(row["equity"], 0.0),
+            "session_time": _safe_float(row["session_hour"], _session_hour_from_epoch(row["entryTime"])),
+            "target_factor": _safe_float(row["target_factor"], 1.0),
+            "target_price": _safe_float(row["target_price"], 0.0),
+            "overshoot_before_close": _safe_float(row["overshoot_before_close"], 0.0),
+            "mfe_price_distance": _safe_float(row["mfe_price_distance"], 0.0),
+            "mae_price_distance": _safe_float(row["mae_price_distance"], 0.0),
+            "time_to_close_sec": _safe_int(row["time_to_close_sec"], 0),
+            "time_to_target_cross_sec": _safe_int(row["time_to_target_cross_sec"], 0),
+            "target_crossed_before_close": 1 if target_crossed_before_close else 0,
+        }
+        result = {
+            "profit": _safe_float(row["profit"], 0.0),
+            "status": row["status"],
+            "win": _safe_float(row["profit"], 0.0) > 0,
+            "close_reason": str(row["reason"] or ""),
+            "close_reason_family": _close_reason_family(row["reason"]),
+            "force_close_after_target_crossed": bool(_safe_int(row["force_close_after_target_crossed"], 0)),
+            "target_crossed_before_close": target_crossed_before_close,
+        }
+        dataset.append(
+            {
+                "trade_id": row["trade_id"],
+                "symbol": row["symbol"],
+                "broker_id": row["broker_id"],
+                "account_id": row["account_id"],
                 "risk_mode": _normalize_mode(row["risk_mode"]),
                 "features": features,
                 "result": result,
@@ -171,7 +294,13 @@ def export_dataset_csv(file_path, limit: int = 10000):
 
     with open(file_path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["trade_id", "symbol", "risk_mode", *FEATURE_COLUMNS, "profit", "status", "win"])
+        writer.writerow([
+            "trade_id", "symbol", "risk_mode", *FEATURE_COLUMNS,
+            "profit", "status", "win", "target_quality",
+            "target_hit", "force_close_after_target_crossed",
+            "mfe_price_distance", "mae_price_distance",
+            "time_to_close_sec", "target_first_crossed_at", "time_to_target_cross_sec",
+        ])
         for row in data:
             features = row["features"]
             result = row["result"]
@@ -187,9 +316,20 @@ def export_dataset_csv(file_path, limit: int = 10000):
                     features.get("balance"),
                     features.get("equity"),
                     features.get("session_time"),
+                    features.get("target_factor"),
+                    features.get("target_hit"),
+                    features.get("overshoot_before_close"),
                     result.get("profit"),
                     result.get("status"),
                     int(bool(result.get("win"))),
+                    result.get("target_quality"),
+                    int(bool(result.get("target_hit"))),
+                    int(bool(result.get("force_close_after_target_crossed"))),
+                    result.get("mfe_price_distance"),
+                    result.get("mae_price_distance"),
+                    result.get("time_to_close_sec"),
+                    result.get("target_first_crossed_at"),
+                    result.get("time_to_target_cross_sec"),
                 ]
             )
 

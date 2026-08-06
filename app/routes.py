@@ -19,7 +19,7 @@ from .terminal_adapters import (
     sync_all_terminal_trade_state,
 )
 from .terminal_adapters import ensure_terminal_running
-from .ml_risk import get_dataset as get_ml_dataset, train_risk_mode_model, export_dataset_csv, export_dataset_json
+from .ml_risk import get_dataset as get_ml_dataset, get_close_decision_dataset, train_risk_mode_model, export_dataset_csv, export_dataset_json
 
 # === Analytic TP/SL Logic ===
 
@@ -108,6 +108,9 @@ class AutoTradeConfigRequest(BaseModel):
     risk_hybrid_addon_mode: str | None = None
     risk_adaptive_window_days: int | None = None
     risk_adaptive_min_trades: int | None = None
+    protective_mode: str | None = None
+    min_hold_sec: int | None = None
+    reversal_confirm_cycles: int | None = None
     hedge_enabled: bool | None = None
     hedge_threshold: float | None = None
     hedge_slots: int | None = None
@@ -266,7 +269,7 @@ def mt5_error_log_clear():
 
 
 from .logic import analyze_symbol, get_signal_snapshot, get_ohlcv_snapshot, normalize_timeframes
-from .auto_trader import is_auto_trader_thread_started, get_auto_trader_runtime_status
+from .auto_trader import is_auto_trader_thread_started, get_auto_trader_runtime_status, build_adaptive_target_snapshot
 
 _SYNC_LOCK = threading.Lock()
 _LAST_TERMINAL_SYNC_TS = 0.0
@@ -329,6 +332,7 @@ def _sync_terminal_trade_views():
 
 def _decorate_open_positions_with_strategy_state(open_rows, history_rows, account_state):
     history_rows = history_rows or []
+    recent_closed_rows = [row for row in history_rows if str(row.get("status") or "").lower() == "closed"]
     trailing_enabled = bool(account_state.get("auto_trade_trailing_enabled", True))
     trailing_mode = str(account_state.get("auto_trade_trailing_mode") or "stateful_hl")
 
@@ -380,6 +384,11 @@ def _decorate_open_positions_with_strategy_state(open_rows, history_rows, accoun
             "trailing_enabled": trailing_enabled,
             "trailing_mode": trailing_mode,
         }
+        target_snapshot = build_adaptive_target_snapshot(row, account_state, recent_closed_rows=recent_closed_rows)
+        row["target_price"] = target_snapshot.get("target_price")
+        row["stop_price"] = target_snapshot.get("stop_price")
+        row["target_tp_value"] = target_snapshot.get("effective_tp_value")
+        row["target_meta"] = target_snapshot
         row["strategy_badges"] = badges
         decorated.append(row)
     return decorated
@@ -536,6 +545,16 @@ def get_auto_trade_events_route(
 @router.get("/account/auto_trade_ml_dataset")
 def get_auto_trade_ml_dataset(limit: int = 2000):
     rows = get_ml_dataset(limit=limit)
+    return {
+        "status": "ok",
+        "rows": len(rows),
+        "dataset": rows,
+    }
+
+
+@router.get("/account/auto_trade_close_decision_dataset")
+def get_auto_trade_close_decision_dataset(limit: int = 2000, broker_id: int | None = None, account_id: int | None = None):
+    rows = get_close_decision_dataset(limit=limit, broker_id=broker_id, account_id=account_id)
     return {
         "status": "ok",
         "rows": len(rows),
@@ -1100,6 +1119,24 @@ def set_auto_trade_config(payload: AutoTradeConfigRequest):
             return {"status": "error", "message": "Adaptive min trades harus antara 3 sampai 5000."}
         state["auto_trade_risk_adaptive_min_trades"] = value
 
+    if payload.protective_mode is not None:
+        value = str(payload.protective_mode).strip().lower()
+        if value not in ("engine_only", "broker_sl", "broker_tpsl"):
+            return {"status": "error", "message": "Protective mode harus engine_only, broker_sl, atau broker_tpsl."}
+        state["auto_trade_protective_mode"] = value
+
+    if payload.min_hold_sec is not None:
+        value = int(payload.min_hold_sec)
+        if value < 0 or value > 86400:
+            return {"status": "error", "message": "Min hold sec harus antara 0 sampai 86400."}
+        state["auto_trade_min_hold_sec"] = value
+
+    if payload.reversal_confirm_cycles is not None:
+        value = int(payload.reversal_confirm_cycles)
+        if value < 1 or value > 20:
+            return {"status": "error", "message": "Reversal confirm cycles harus antara 1 sampai 20."}
+        state["auto_trade_reversal_confirm_cycles"] = value
+
     if payload.hedge_enabled is not None:
         state["hedge_enabled"] = bool(payload.hedge_enabled)
 
@@ -1148,6 +1185,9 @@ def set_auto_trade_config(payload: AutoTradeConfigRequest):
         "risk_hybrid_addon_mode": state.get("auto_trade_risk_hybrid_addon_mode", "balance_scaled"),
         "risk_adaptive_window_days": state.get("auto_trade_risk_adaptive_window_days", 90),
         "risk_adaptive_min_trades": state.get("auto_trade_risk_adaptive_min_trades", 12),
+        "protective_mode": state.get("auto_trade_protective_mode", "broker_sl"),
+        "min_hold_sec": state.get("auto_trade_min_hold_sec", 15),
+        "reversal_confirm_cycles": state.get("auto_trade_reversal_confirm_cycles", 2),
         "hedge_enabled": bool(state.get("hedge_enabled", True)),
         "hedge_threshold": state.get("hedge_threshold", -0.05),
         "hedge_slots": state.get("hedge_slots", 2),

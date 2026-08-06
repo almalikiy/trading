@@ -251,6 +251,9 @@ def _get_trade_runtime(trade_row, direction, atr_value):
             "break_even_done": False,
             "highest": entry,
             "lowest": entry,
+            "mfe_price_distance": 0.0,
+            "mae_price_distance": 0.0,
+            "target_first_crossed_at": None,
             "updated_at": int(time.time()),
             "direction": direction,
         }
@@ -275,6 +278,151 @@ def _profit_distance(direction, entry, price):
     if direction == "sell":
         return entry - price
     return 0.0
+
+
+def _normalize_trade_direction(trade_type):
+    value = str(trade_type or "").strip().lower()
+    if value in ("buy", "hedge_buy"):
+        return "buy"
+    if value in ("sell", "hedge_sell"):
+        return "sell"
+    return None
+
+
+def _resolve_trade_atr_value(trade_row, fallback_atr=None):
+    atr_value = _coerce_float((trade_row or {}).get("atr_value"), 0.0)
+    if atr_value > 0:
+        return atr_value
+
+    signal_context = (trade_row or {}).get("signal_context") or {}
+    if isinstance(signal_context, dict):
+        context_atr = _coerce_float(signal_context.get("atr_value"), 0.0)
+        if context_atr > 0:
+            return context_atr
+        timeframes = signal_context.get("timeframes") or {}
+        values = []
+        if isinstance(timeframes, dict):
+            for payload in timeframes.values():
+                if not isinstance(payload, dict):
+                    continue
+                value = _coerce_float(payload.get("atr"), 0.0)
+                if value > 0:
+                    values.append(value)
+        if values:
+            return sum(values) / len(values)
+
+    fallback = _coerce_float(fallback_atr, 0.0)
+    return fallback if fallback > 0 else 0.0
+
+
+def _recent_direction_performance(trade_row, recent_closed_rows=None):
+    recent_rows = recent_closed_rows
+    if recent_rows is None:
+        recent_rows = get_recent_closed_trades(
+            limit=40,
+            broker_id=(trade_row or {}).get("broker_id"),
+            account_id=(trade_row or {}).get("account_id"),
+        )
+
+    direction = _normalize_trade_direction((trade_row or {}).get("type"))
+    symbol = str((trade_row or {}).get("symbol") or "").strip().upper()
+    if direction not in ("buy", "sell"):
+        return {"samples": 0, "winrate": None, "avg_profit": None}
+
+    matches = []
+    for row in recent_rows or []:
+        if _normalize_trade_direction((row or {}).get("type")) != direction:
+            continue
+        row_symbol = str((row or {}).get("symbol") or "").strip().upper()
+        if symbol and row_symbol and row_symbol != symbol:
+            continue
+        matches.append(row)
+        if len(matches) >= 12:
+            break
+
+    if not matches:
+        return {"samples": 0, "winrate": None, "avg_profit": None}
+
+    profits = [_coerce_float(row.get("profit"), 0.0) for row in matches]
+    wins = len([profit for profit in profits if profit > 0])
+    return {
+        "samples": len(matches),
+        "winrate": wins / len(matches),
+        "avg_profit": sum(profits) / len(profits),
+    }
+
+
+def build_adaptive_target_snapshot(trade_row, account_state, recent_closed_rows=None, fallback_atr=None):
+    row = dict(trade_row or {})
+    direction = _normalize_trade_direction(row.get("type"))
+    entry = _coerce_float(row.get("entry"), 0.0)
+    base_tp_value = _coerce_float(row.get("tpValue"), 0.0)
+    stop_distance = _coerce_float(row.get("slValue"), 0.0)
+    atr_value = _resolve_trade_atr_value(row, fallback_atr=fallback_atr)
+    signal_context = row.get("signal_context") if isinstance(row.get("signal_context"), dict) else {}
+
+    if base_tp_value <= 0 and atr_value > 0:
+        tp_mult = max(0.2, min(20.0, _coerce_float((account_state or {}).get("auto_trade_atr_tp_mult"), 2.5)))
+        base_tp_value = atr_value * tp_mult
+
+    target_price = None
+    stop_price = None
+    adaptive_factor = 1.0
+    signal_score = _coerce_float(row.get("signal_score"), _coerce_float(signal_context.get("score"), 0.0))
+
+    alignment_ratio = None
+    tf_payload = signal_context.get("timeframes") or {}
+    if direction in ("buy", "sell") and isinstance(tf_payload, dict) and tf_payload:
+        aligned = 0
+        total = 0
+        for values in tf_payload.values():
+            if not isinstance(values, dict):
+                continue
+            tf_direction = _normalize_trade_direction(values.get("direction"))
+            if tf_direction not in ("buy", "sell"):
+                continue
+            total += 1
+            if tf_direction == direction:
+                aligned += 1
+        if total > 0:
+            alignment_ratio = aligned / total
+
+    recent_perf = _recent_direction_performance(row, recent_closed_rows=recent_closed_rows)
+
+    if signal_score > 0:
+        adaptive_factor += max(-0.12, min(0.18, (signal_score - 0.55) * 0.8))
+    if alignment_ratio is not None:
+        adaptive_factor += max(-0.18, min(0.18, (alignment_ratio - 0.5) * 0.5))
+    if recent_perf["samples"] >= 3 and recent_perf["winrate"] is not None:
+        adaptive_factor += max(-0.15, min(0.15, (recent_perf["winrate"] - 0.5) * 0.5))
+
+    adaptive_factor = max(0.65, min(1.75, adaptive_factor))
+    effective_tp_value = base_tp_value * adaptive_factor if base_tp_value > 0 else 0.0
+
+    if direction == "buy" and entry > 0 and effective_tp_value > 0:
+        target_price = entry + effective_tp_value
+    elif direction == "sell" and entry > 0 and effective_tp_value > 0:
+        target_price = entry - effective_tp_value
+
+    if direction == "buy" and entry > 0 and stop_distance > 0:
+        stop_price = entry - stop_distance
+    elif direction == "sell" and entry > 0 and stop_distance != 0:
+        stop_price = entry + stop_distance
+
+    return {
+        "mode": "adaptive" if base_tp_value > 0 else "unavailable",
+        "base_tp_value": _rounded(base_tp_value, 6),
+        "effective_tp_value": _rounded(effective_tp_value, 6),
+        "target_price": _rounded(target_price, 6),
+        "stop_price": _rounded(stop_price, 6),
+        "adaptive_factor": _rounded(adaptive_factor, 6),
+        "signal_score": _rounded(signal_score, 6),
+        "signal_alignment_ratio": _rounded(alignment_ratio, 6),
+        "recent_winrate": _rounded(recent_perf.get("winrate"), 6),
+        "recent_samples": int(recent_perf.get("samples") or 0),
+        "recent_avg_profit": _rounded(recent_perf.get("avg_profit"), 6),
+        "atr_value": _rounded(atr_value, 6),
+    }
 
 
 def _apply_partial_take_profit(state, trade_row, runtime, adapter, symbol, ticket, direction, entry, last_price, constraints):
@@ -670,6 +818,63 @@ def _resolve_initial_tpsl(state, lot_to_open, atr_value):
         tp_value = atr_value * tp_mult
 
     return _coerce_float(tp_value, 0.0), _coerce_float(sl_value, 0.0)
+
+
+def _resolve_protective_order_prices(state, broker, symbol, direction, tp_value, sl_value):
+    mode = str((state or {}).get("auto_trade_protective_mode") or "broker_sl").strip().lower()
+    if mode == "engine_only":
+        return None, None
+
+    tick_snapshot = get_broker_symbol_tick(broker, symbol=symbol, auto_start=False)
+    if not tick_snapshot.get("ready"):
+        return None, None
+
+    bid = _coerce_float(tick_snapshot.get("bid"), 0.0)
+    ask = _coerce_float(tick_snapshot.get("ask"), 0.0)
+    if direction == "buy":
+        entry_hint = ask if ask > 0 else _coerce_float(tick_snapshot.get("mid"), 0.0)
+        sl_price = (entry_hint - _coerce_float(sl_value, 0.0)) if entry_hint > 0 and _coerce_float(sl_value, 0.0) > 0 else None
+        tp_price = (entry_hint + _coerce_float(tp_value, 0.0)) if entry_hint > 0 and _coerce_float(tp_value, 0.0) > 0 else None
+    elif direction == "sell":
+        entry_hint = bid if bid > 0 else _coerce_float(tick_snapshot.get("mid"), 0.0)
+        sl_price = (entry_hint + _coerce_float(sl_value, 0.0)) if entry_hint > 0 and _coerce_float(sl_value, 0.0) > 0 else None
+        tp_price = (entry_hint - _coerce_float(tp_value, 0.0)) if entry_hint > 0 and _coerce_float(tp_value, 0.0) > 0 else None
+    else:
+        return None, None
+
+    if mode == "broker_sl":
+        return None, sl_price
+    if mode == "broker_tpsl":
+        return tp_price, sl_price
+    return None, None
+
+
+def _update_trade_runtime_path_metrics(trade_row, runtime, direction, entry, last_price, target_snapshot):
+    if not runtime or direction not in ("buy", "sell") or entry <= 0 or last_price <= 0:
+        return runtime
+
+    highest = max(_coerce_float(runtime.get("highest"), entry), last_price)
+    lowest = min(_coerce_float(runtime.get("lowest"), entry), last_price)
+    runtime["highest"] = highest
+    runtime["lowest"] = lowest
+
+    if direction == "buy":
+        runtime["mfe_price_distance"] = max(_coerce_float(runtime.get("mfe_price_distance"), 0.0), highest - entry)
+        runtime["mae_price_distance"] = max(_coerce_float(runtime.get("mae_price_distance"), 0.0), entry - lowest)
+    else:
+        runtime["mfe_price_distance"] = max(_coerce_float(runtime.get("mfe_price_distance"), 0.0), entry - lowest)
+        runtime["mae_price_distance"] = max(_coerce_float(runtime.get("mae_price_distance"), 0.0), highest - entry)
+
+    target_price = _coerce_float((target_snapshot or {}).get("target_price"), 0.0)
+    crossed = False
+    if target_price > 0:
+        if direction == "buy" and highest >= target_price:
+            crossed = True
+        elif direction == "sell" and lowest <= target_price:
+            crossed = True
+    if crossed and not runtime.get("target_first_crossed_at"):
+        runtime["target_first_crossed_at"] = int(time.time())
+    return runtime
 
 
 def _apply_trailing_policy(state, trade_row, direction, entry, last_price, atr_value):
@@ -1615,8 +1820,19 @@ def _run_auto_trade_cycle():
             method=method,
             score=_coerce_float(signal_scoring.get("score"), 0.0),
         )
+        tp_value, sl_value = _resolve_initial_tpsl(state, lot_to_open, atr_value)
         try:
-            result = adapter.open_trade(symbol, lot_to_open, signal)
+            protective_tp, protective_sl = (None, None)
+            if method != "mouse":
+                protective_tp, protective_sl = _resolve_protective_order_prices(
+                    state,
+                    broker,
+                    symbol,
+                    signal,
+                    tp_value,
+                    sl_value,
+                )
+            result = adapter.open_trade(symbol, lot_to_open, signal, tp=protective_tp, sl=protective_sl)
         except Exception as exc:
             _diag_open_attempt(
                 "error",
@@ -1657,8 +1873,6 @@ def _run_auto_trade_cycle():
         equity = _coerce_float((metrics or {}).get("equity"), _coerce_float((metrics or {}).get("balance"), 0.0))
         margin_usage_pct = (estimated_margin / margin_free) * 100.0 if margin_free > 0 and estimated_margin > 0 else None
 
-        tp_value, sl_value = _resolve_initial_tpsl(state, lot_to_open, atr_value)
-
         open_trade_payload = {
             "trade_id": trade_id,
             "status": "open",
@@ -1688,6 +1902,28 @@ def _run_auto_trade_cycle():
             "session_hour": current_hour,
             "signal_context": signal_context,
         }
+        target_snapshot = build_adaptive_target_snapshot(
+            open_trade_payload,
+            state,
+            recent_closed_rows=get_recent_closed_trades(
+                limit=40,
+                broker_id=broker.get("id"),
+                account_id=(metrics or {}).get("account_id"),
+            ),
+            fallback_atr=atr_value,
+        )
+        if isinstance(open_trade_payload.get("signal_context"), dict):
+            open_trade_payload["signal_context"] = {
+                **open_trade_payload["signal_context"],
+                "target_plan": {
+                    "base_tp_value": target_snapshot.get("base_tp_value"),
+                    "effective_tp_value": target_snapshot.get("effective_tp_value"),
+                    "target_price": target_snapshot.get("target_price"),
+                    "adaptive_factor": target_snapshot.get("adaptive_factor"),
+                    "recent_winrate": target_snapshot.get("recent_winrate"),
+                    "recent_samples": target_snapshot.get("recent_samples"),
+                },
+            }
         create_trade_open_record(open_trade_payload)
         log_trade(
             open_trade_payload,
@@ -1699,6 +1935,8 @@ def _run_auto_trade_cycle():
                 "balance": _coerce_float((metrics or {}).get("balance"), equity),
                 "equity": equity,
                 "session_time": current_hour,
+                "target_tp_value": target_snapshot.get("effective_tp_value"),
+                "target_factor": target_snapshot.get("adaptive_factor"),
             },
             result={"status": "open", "risk_mode": effective_risk_mode},
         )
@@ -1758,6 +1996,7 @@ def _run_auto_trade_cycle():
             signal_score=_coerce_float(signal_scoring.get("score"), 0.0),
         )
 
+    recent_closed_rows = get_recent_closed_trades(limit=40)
     for t in open_rows:
         if _is_hedge_trade(t):
             continue
@@ -1766,6 +2005,10 @@ def _run_auto_trade_cycle():
             continue
         adapter, method = get_broker_adapter(broker, t.get("execution_mode"))
         if method == "mouse":
+            continue
+
+        direction = _normalize_trade_direction(t.get("type"))
+        if direction not in ("buy", "sell"):
             continue
 
         last_price = 0.0
@@ -1792,9 +2035,11 @@ def _run_auto_trade_cycle():
         entry = float(entry)
         tp = t.get("tpValue")
         sl = t.get("slValue")
-        direction = str(t.get("type", "")).lower()
         trade_runtime = _get_trade_runtime(t, direction, atr_value)
         ticket = int(t.get("ticket") or 0)
+        target_snapshot = build_adaptive_target_snapshot(t, state, recent_closed_rows=recent_closed_rows, fallback_atr=atr_value)
+        effective_tp_value = _coerce_float(target_snapshot.get("effective_tp_value"), _coerce_float(tp, 0.0))
+        _update_trade_runtime_path_metrics(t, trade_runtime, direction, entry, last_price, target_snapshot)
 
         constraints = get_broker_symbol_constraints(broker, symbol=t.get("symbol") or symbol, auto_start=False)
         if ticket > 0:
@@ -1822,22 +2067,43 @@ def _run_auto_trade_cycle():
             sl = updated_sl
 
         should_close = False
-        if tp not in (None, 0):
-            tp = float(tp)
-            if direction == "buy" and last_price >= entry + tp:
+        close_reason = None
+        if effective_tp_value > 0:
+            if direction == "buy" and last_price >= entry + effective_tp_value:
                 should_close = True
-            if direction == "sell" and last_price <= entry - tp:
+                close_reason = "auto_close_tp"
+            if direction == "sell" and last_price <= entry - effective_tp_value:
                 should_close = True
+                close_reason = "auto_close_tp"
 
         if (not should_close) and sl is not None:
             sl = float(sl)
             if direction == "buy" and last_price <= entry - sl:
                 should_close = True
+                close_reason = "auto_close_sl"
             if direction == "sell" and last_price >= entry + sl:
                 should_close = True
+                close_reason = "auto_close_sl"
 
         if not should_close and signal in ("buy", "sell") and signal != direction:
-            should_close = True
+            required_cycles = max(1, min(20, _coerce_int(state.get("auto_trade_reversal_confirm_cycles"), 2)))
+            min_hold_sec = max(0, min(86400, _coerce_int(state.get("auto_trade_min_hold_sec"), 15)))
+            entry_time = _coerce_int(t.get("entryTime"), int(time.time()))
+            held_sec = max(0, int(time.time()) - entry_time)
+
+            previous_signal = str(trade_runtime.get("reversal_signal") or "")
+            if previous_signal == signal:
+                trade_runtime["reversal_count"] = _coerce_int(trade_runtime.get("reversal_count"), 0) + 1
+            else:
+                trade_runtime["reversal_signal"] = signal
+                trade_runtime["reversal_count"] = 1
+
+            if held_sec >= min_hold_sec and _coerce_int(trade_runtime.get("reversal_count"), 0) >= required_cycles:
+                should_close = True
+                close_reason = "auto_close_reversal_confirmed"
+        elif signal == direction or signal == "wait":
+            trade_runtime["reversal_signal"] = None
+            trade_runtime["reversal_count"] = 0
 
         if not should_close:
             continue
@@ -1861,7 +2127,12 @@ def _run_auto_trade_cycle():
                 profit=order.get("profit"),
                 exit_time=int(time.time()),
                 ticket=ticket,
-                reason="auto_close",
+                reason=close_reason or "auto_close",
+                runtime_metrics={
+                    "mfe_price_distance": trade_runtime.get("mfe_price_distance"),
+                    "mae_price_distance": trade_runtime.get("mae_price_distance"),
+                    "target_first_crossed_at": trade_runtime.get("target_first_crossed_at"),
+                },
             )
             _diag_close_attempt(
                 "ok",
