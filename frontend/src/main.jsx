@@ -6,6 +6,7 @@ import { ThemeProvider, createTheme, CssBaseline } from "@mui/material";
 import App from "./App";
 import TradeHistory from "./TradeHistory";
 import AccountMonitor from "./AccountMonitor";
+import AdaptiveInsights from "./AdaptiveInsights";
 import { useState } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
@@ -33,6 +34,7 @@ function Root() {
             <Route path="/" element={<App  />} />
             <Route path="/history" element={<TradeHistory />} />
             <Route path="/account" element={<AccountMonitor />} />
+            <Route path="/adaptive" element={<AdaptiveInsights />} />
           </Routes>
         </Layout>
       </BrowserRouter>

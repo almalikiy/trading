@@ -21,6 +21,7 @@ import MenuIcon from "@mui/icons-material/Menu";
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import HistoryIcon from "@mui/icons-material/History";
 import AccountBalanceWalletIcon from "@mui/icons-material/AccountBalanceWallet";
+import InsightsIcon from "@mui/icons-material/Insights";
 
 export function Layout({ children, darkMode, setDarkMode }) {
   const [open, setOpen] = useState(false);
@@ -32,6 +33,7 @@ export function Layout({ children, darkMode, setDarkMode }) {
     if (location.pathname === "/") return "Trading Signal Dashboard";
     if (location.pathname === "/history") return "Trade History";
     if (location.pathname === "/account") return "Account Monitor";
+    if (location.pathname === "/adaptive") return "Adaptive & ML Insights";
     return "Trading Dashboard";
   };
   return (
@@ -91,6 +93,10 @@ export function Layout({ children, darkMode, setDarkMode }) {
           <ListItem button selected={location.pathname === "/account"} onClick={() => { navigate("/account"); setOpen(false); }} sx={{ borderRadius: 2, mb: 1 }}>
             <AccountBalanceWalletIcon sx={{ mr: 1, color: location.pathname === "/account" ? theme.palette.primary.main : '#888' }} />
             <ListItemText primary="Account Monitor" />
+          </ListItem>
+          <ListItem button selected={location.pathname === "/adaptive"} onClick={() => { navigate("/adaptive"); setOpen(false); }} sx={{ borderRadius: 2, mb: 1 }}>
+            <InsightsIcon sx={{ mr: 1, color: location.pathname === "/adaptive" ? theme.palette.primary.main : '#888' }} />
+            <ListItemText primary="Adaptive Insights" />
           </ListItem>
         </List>
       </Drawer>
