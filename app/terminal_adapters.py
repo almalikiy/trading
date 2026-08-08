@@ -20,6 +20,91 @@ _SYNC_ERROR_THROTTLE = {}
 _SYNC_ERROR_LOCK = threading.Lock()
 
 
+def _normalize_terminal_time_offset_seconds(raw_offset_sec):
+    """Normalize raw terminal-local delta by removing full-day drift (weekends/market close)."""
+    try:
+        raw = int(raw_offset_sec)
+    except Exception:
+        return 0
+
+    candidates = [raw - (86400 * day_shift) for day_shift in range(-2, 3)]
+    bounded = [value for value in candidates if abs(value) <= (15 * 3600)]
+    if bounded:
+        return min(bounded, key=lambda value: abs(value))
+    return raw
+
+
+def _calibrate_terminal_epoch(epoch_seconds, offset_seconds):
+    try:
+        ts = int(epoch_seconds or 0)
+    except Exception:
+        ts = 0
+    if ts <= 0:
+        return None
+    try:
+        return int(ts + int(offset_seconds or 0))
+    except Exception:
+        return ts
+
+
+def normalize_terminal_time_offset_seconds(raw_offset_sec):
+    return _normalize_terminal_time_offset_seconds(raw_offset_sec)
+
+
+def calibrate_terminal_epoch_for_display(epoch_seconds, offset_seconds):
+    return _calibrate_terminal_epoch(epoch_seconds, offset_seconds)
+
+
+def _resolve_time_calibration_symbol(broker, positions):
+    for position in positions or []:
+        symbol = str(getattr(position, "symbol", "") or "").strip().upper()
+        if symbol:
+            return symbol
+    broker_symbol = str((broker or {}).get("default_symbol") or "").strip().upper()
+    if broker_symbol:
+        return broker_symbol
+    return "XAUUSD"
+
+
+def _estimate_terminal_to_local_offset_seconds(symbol):
+    symbol = str(symbol or "XAUUSD").strip().upper() or "XAUUSD"
+    try:
+        tick = mt5.symbol_info_tick(symbol)
+    except Exception:
+        tick = None
+
+    tick_epoch = int(getattr(tick, "time", 0) or 0) if tick is not None else 0
+    if tick_epoch <= 0:
+        try:
+            rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 1)
+            if rates is not None and len(rates) > 0:
+                tick_epoch = int(rates[0]["time"])
+        except Exception:
+            tick_epoch = 0
+
+    if tick_epoch <= 0:
+        return 0, None
+
+    local_now = int(time.time())
+    raw_offset = local_now - tick_epoch
+    normalized_offset = _normalize_terminal_time_offset_seconds(raw_offset)
+    return normalized_offset, tick_epoch
+
+
+def estimate_broker_time_offset_seconds(broker, symbol="XAUUSD", auto_start=False):
+    broker = broker or {}
+    if str(broker.get("platform", "mt5")).lower() != "mt5":
+        return 0, None
+
+    tick_payload = get_broker_symbol_tick(broker, symbol=symbol, auto_start=auto_start)
+    tick_epoch = int(tick_payload.get("time") or 0)
+    if not tick_payload.get("ready") or tick_epoch <= 0:
+        return 0, None
+
+    raw_offset = int(time.time()) - tick_epoch
+    return _normalize_terminal_time_offset_seconds(raw_offset), tick_epoch
+
+
 def ensure_terminal_running(terminal_path: Optional[str]):
     if not terminal_path:
         return False

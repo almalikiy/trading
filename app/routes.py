@@ -13,6 +13,8 @@ from .broker_routes import TradeOpenRequest, open_trade_v2
 from .terminal_adapters import (
     get_broker_adapter,
     get_broker_account_metrics,
+    estimate_broker_time_offset_seconds,
+    calibrate_terminal_epoch_for_display,
     probe_broker_order_status,
     get_broker_symbol_constraints,
     normalize_lot_with_constraints,
@@ -280,6 +282,67 @@ def save_trade_history(trade):
 
 def load_trade_history():
     return get_trade_history()
+
+
+def _calibrate_trade_row_times_for_display(rows):
+    calibrated = []
+    offset_cache = {}
+
+    for row in rows or []:
+        item = dict(row)
+        platform = str(item.get("platform") or "").lower()
+        broker_id = item.get("broker_id")
+
+        offset_seconds = 0
+        if platform == "mt5":
+            cache_key = broker_id if broker_id is not None else "default"
+            if cache_key not in offset_cache:
+                broker = get_broker(broker_id) if broker_id is not None else get_default_broker()
+                symbol = str(item.get("symbol") or (broker or {}).get("default_symbol") or "XAUUSD").strip().upper() or "XAUUSD"
+                if broker:
+                    offset, _ = estimate_broker_time_offset_seconds(broker, symbol=symbol, auto_start=False)
+                    offset_cache[cache_key] = int(offset)
+                else:
+                    offset_cache[cache_key] = 0
+            offset_seconds = int(offset_cache.get(cache_key, 0))
+
+        if offset_seconds:
+            if item.get("entryTime"):
+                item["entryTime"] = calibrate_terminal_epoch_for_display(item.get("entryTime"), offset_seconds)
+            if item.get("exitTime"):
+                item["exitTime"] = calibrate_terminal_epoch_for_display(item.get("exitTime"), offset_seconds)
+
+        calibrated.append(item)
+
+    return calibrated
+
+
+def _calibrate_trade_detail_times_for_display(details):
+    payload = dict(details or {})
+    trade = dict(payload.get("trade") or {})
+    if not trade:
+        return payload
+
+    if str(trade.get("platform") or "mt5").lower() != "mt5":
+        payload["trade"] = trade
+        return payload
+
+    broker_id = trade.get("broker_id")
+    broker = get_broker(broker_id) if broker_id is not None else get_default_broker()
+    symbol = str(trade.get("symbol") or (broker or {}).get("default_symbol") or "XAUUSD").strip().upper() or "XAUUSD"
+    if not broker:
+        payload["trade"] = trade
+        return payload
+
+    offset_seconds, _ = estimate_broker_time_offset_seconds(broker, symbol=symbol, auto_start=False)
+    if offset_seconds:
+        if trade.get("entryTime"):
+            trade["entryTime"] = calibrate_terminal_epoch_for_display(trade.get("entryTime"), offset_seconds)
+        if trade.get("exitTime"):
+            trade["exitTime"] = calibrate_terminal_epoch_for_display(trade.get("exitTime"), offset_seconds)
+
+    payload["trade"] = trade
+    return payload
 
 
 def _resolve_auto_trade_symbol_for_state(state):
@@ -1484,7 +1547,7 @@ def save_open_trade(user_id: str = Query(...), open_trade: dict = Body(...)):
 @router.get("/trade/history")
 def get_trade_history_endpoint():
     _sync_terminal_trade_views()
-    return load_trade_history()
+    return _calibrate_trade_row_times_for_display(load_trade_history())
 
 
 @router.get("/trade/{trade_identifier}/details")
@@ -1492,7 +1555,7 @@ def get_trade_details_endpoint(trade_identifier: str):
     details = get_trade_details(trade_identifier)
     if not details:
         raise HTTPException(status_code=404, detail="Trade not found")
-    return details
+    return _calibrate_trade_detail_times_for_display(details)
 
 
 @router.get("/trade/open_count")
@@ -1507,7 +1570,8 @@ def get_trade_open_positions():
     rows = list_open_trades()
     history = get_trade_history()
     state = get_account_state()
-    return _decorate_open_positions_with_strategy_state(rows, history, state)
+    decorated = _decorate_open_positions_with_strategy_state(rows, history, state)
+    return _calibrate_trade_row_times_for_display(decorated)
 
 
 @router.post("/trade/update_tpsl")
