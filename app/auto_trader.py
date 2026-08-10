@@ -1,3 +1,4 @@
+# app/auto_trader.py
 import threading
 import time
 import uuid
