@@ -25,8 +25,9 @@ Aplikasi web untuk memberikan sinyal trading open/buy pada XAUUSD atau simbol la
 4. Jalankan backend: `uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload`
 5. Jalankan frontend: `cd frontend && npm run dev`
 6. Testing backend CORS respons: 
-   curl -i -X OPTIONS http://127.0.0.1:8001/account/state -H "Origin: https://trading.almalikiy.net" -H "Access-Control-Request-Method: GET"
-
+   `curl -i -X OPTIONS http://127.0.0.1:8001/account/state -H "Origin: https://trading.almalikiy.net" -H "Access-Control-Request-Method: GET"`
+7. Memeriksa apakah port sudah dipakai : `netstat -ano | findstr :8001`
+8. Task kill jika diperlukan : `taskkill /F /PID 1234`
 
 ## Frontend
 1. Build : 
@@ -35,6 +36,10 @@ Aplikasi web untuk memberikan sinyal trading open/buy pada XAUUSD atau simbol la
 - Pastikan MT5 berjalan dan dapat diakses dari backend
 - Ganti parameter trading sesuai kebutuhan di web
 - Simulator hanya ilustrasi, bukan jaminan profit
+
+## Task Scheduler
+- Program/Script: 
+- Add argument
 
 ## TODO Best-Practice (Updated)
 - [x] Tambahkan mode proteksi eksekusi order: `engine_only`, `broker_sl`, `broker_tpsl`.

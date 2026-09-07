@@ -113,7 +113,7 @@ def ensure_terminal_running(terminal_path: Optional[str]):
         if proc == normalized:
             return True
     try:
-        subprocess.Popen([terminal_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen([terminal_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
         time.sleep(1.0)
         return True
     except Exception:
@@ -136,6 +136,7 @@ def _list_process_paths():
             ],
             text=True,
             timeout=1,
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
         paths = {
             os.path.normcase(os.path.abspath(line.strip()))

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import CandlestickChart from "./CandlestickChart";
 import LineChart from "./LineChart";
 import {
@@ -191,13 +191,17 @@ export default function App( { darkMode, setDarkMode }) {
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMsg, setSnackbarMsg] = useState("");
 
-  const lastPrice = ohlcv && ohlcv.length > 0 ? Number(ohlcv[ohlcv.length - 1].close) : null;
-  const totalFloatingPnl = openPositions.reduce((sum, trade) => sum + calcTradeFloatingPnl(trade, lastPrice), 0);
+  const latestCandle = useMemo(() => (ohlcv && ohlcv.length > 0 ? ohlcv[ohlcv.length - 1] : null), [ohlcv]);
+  const lastPrice = useMemo(() => (latestCandle ? Number(latestCandle.close) : null), [latestCandle]);
+  const totalFloatingPnl = useMemo(
+    () => openPositions.reduce((sum, trade) => sum + calcTradeFloatingPnl(trade, lastPrice), 0),
+    [openPositions, lastPrice],
+  );
 
   const theme = useTheme();
   const clientTimeZone = getClientTimeZoneLabel();
 
-  const refreshAccountState = () => {
+  const refreshAccountState = useCallback(() => {
     fetch(`${getBackendUrl("mt5", "http")}/account/state`)
       .then((res) => res.json())
       .then((data) => {
@@ -208,9 +212,9 @@ export default function App( { darkMode, setDarkMode }) {
         setAccountSettingsLoaded(true);
       })
       .catch(() => {});
-  };
+  }, []);
 
-  const refreshBrokers = () => {
+  const refreshBrokers = useCallback(() => {
     fetch(`${getBackendUrl("mt5", "http")}/brokers?include_inactive=true`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load brokers");
@@ -249,11 +253,11 @@ export default function App( { darkMode, setDarkMode }) {
           setDefaultBroker(data);
           setSelectedBrokerId(String(data.id));
           if (data.execution_mode) setSelectedOrderMethod(data.execution_mode);
-     
+
           if (data.default_symbol) {
             setSymbol(data.default_symbol);
           }
-          
+
           setBrokers((prev) => {
             const exists = prev.some((b) => String(b.id) === String(data.id));
             return exists ? prev : [data, ...prev];
@@ -280,7 +284,7 @@ export default function App( { darkMode, setDarkMode }) {
           // Ignore cache parse failures.
         }
       });
-  };
+  }, []);
 
   useEffect(() => {
     try {
@@ -483,16 +487,25 @@ export default function App( { darkMode, setDarkMode }) {
     }
   }, [signal, prevSignal, lastPrice]);
 
-  const activeBroker =
-    brokers.find((b) => String(b.id) === String(selectedBrokerId)) ||
-    (defaultBroker && String(defaultBroker.id) === String(selectedBrokerId) ? defaultBroker : null) ||
-    defaultBroker ||
-    brokers.find((b) => b.is_default) ||
-    brokers[0] ||
-    null;
+  const activeBroker = useMemo(
+    () =>
+      brokers.find((b) => String(b.id) === String(selectedBrokerId)) ||
+      (defaultBroker && String(defaultBroker.id) === String(selectedBrokerId) ? defaultBroker : null) ||
+      defaultBroker ||
+      brokers.find((b) => b.is_default) ||
+      brokers[0] ||
+      null,
+    [brokers, defaultBroker, selectedBrokerId],
+  );
 
-  const selectedBroker = brokers.find((b) => String(b.id) === String(selectedBrokerId)) || activeBroker || null;
-  const selectedBrokerIsMt4 = String(selectedBroker?.platform || "").toLowerCase() === "mt4";
+  const selectedBroker = useMemo(
+    () => brokers.find((b) => String(b.id) === String(selectedBrokerId)) || activeBroker || null,
+    [brokers, activeBroker, selectedBrokerId],
+  );
+  const selectedBrokerIsMt4 = useMemo(
+    () => String(selectedBroker?.platform || "").toLowerCase() === "mt4",
+    [selectedBroker],
+  );
 
   useEffect(() => {
     if (!selectedBrokerId && activeBroker) {
