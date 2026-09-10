@@ -8,7 +8,9 @@ from trading_bot.app.api.routes.dashboard import router as dashboard_router
 from trading_bot.app.api.routes.health import router as health_router
 from trading_bot.app.api.routes.live_validation import router as live_validation_router
 from trading_bot.app.api.routes.market_data import router as market_data_router
+from trading_bot.app.api.routes.mt5 import router as mt5_router
 from trading_bot.app.api.routes.orders import router as orders_router
+from trading_bot.app.api.routes.positions import legacy_router as positions_legacy_router
 from trading_bot.app.api.routes.positions import router as positions_router
 from trading_bot.app.api.routes.strategies import router as strategies_router
 from trading_bot.infrastructure.config.settings import get_settings
@@ -50,6 +52,8 @@ app.include_router(brokers_router)
 app.include_router(dashboard_router)
 app.include_router(orders_router)
 app.include_router(positions_router)
+app.include_router(positions_legacy_router)
+app.include_router(mt5_router)
 app.include_router(live_validation_router)
 app.include_router(market_data_router)
 app.include_router(strategies_router)
