@@ -27,6 +27,7 @@ from .db import (
 )
 from .logic import analyze_symbol, fetch_ohlcv, normalize_timeframes
 from .ml_risk import log_trade, predict_risk_mode
+from trading_bot.strategies.manager import strategy_manager
 from .terminal_adapters import (
     ensure_terminal_running,
     get_broker_adapter,
@@ -1398,6 +1399,17 @@ def _run_auto_trade_cycle():
     state = get_account_state()
     feed_broker = _get_feed_broker(state)
     symbol = "XAUUSD"
+
+    try:
+        strategy_result = strategy_manager.get_active_strategy()
+        active_strategy = strategy_result.get("strategy") if isinstance(strategy_result, dict) else None
+    except Exception as exc:
+        _diag_event("error", "strategy_manager_failed", symbol=symbol, error=str(exc))
+        active_strategy = None
+
+    strategy_name = None
+    if isinstance(active_strategy, dict):
+        strategy_name = active_strategy.get("name")
     if feed_broker and feed_broker.get("default_symbol"):
         symbol = str(feed_broker.get("default_symbol")).strip() or "XAUUSD"
     elif state.get("auto_trade_symbol"):
@@ -1451,9 +1463,23 @@ def _run_auto_trade_cycle():
     terminal_path = feed_broker.get("terminal_path") if feed_broker else None
     atr_period = max(5, min(100, _coerce_int(state.get("auto_trade_atr_period"), 14)))
     timeframes = _resolve_analysis_timeframes(state)
-    signal_payload = analyze_symbol(symbol, mode="real", terminal_path=terminal_path, atr_period=atr_period, timeframes=timeframes)
-    raw_signal = str(signal_payload.get("signal") or "wait").lower()
-    signal_scoring = _signal_strength(signal_payload, state)
+    try:
+        signal_payload = analyze_symbol(symbol, mode="real", terminal_path=terminal_path, atr_period=atr_period, timeframes=timeframes)
+    except Exception as exc:
+        _diag_event("error", "signal_analysis_failed", symbol=symbol, error=str(exc))
+        signal_payload = {"signal": "wait", "confidence": 0.0, "indicators": {}}
+
+    if isinstance(signal_payload, dict):
+        raw_signal = str(signal_payload.get("signal") or "wait").lower()
+    else:
+        raw_signal = "wait"
+
+    try:
+        signal_scoring = _signal_strength(signal_payload, state)
+    except Exception as exc:
+        _diag_event("error", "signal_scoring_failed", symbol=symbol, error=str(exc))
+        signal_scoring = {"direction": "wait", "score": 0.0}
+
     signal = raw_signal if raw_signal in ("buy", "sell") else signal_scoring.get("direction", "wait")
     current_hour = datetime.now().hour
     _diag_event(
@@ -1492,8 +1518,17 @@ def _run_auto_trade_cycle():
         )
         signal = "wait"
 
-    atr_value = _resolve_atr_value(signal_payload)
-    signal_context = _build_signal_context(signal_payload, signal_scoring, raw_signal, signal, atr_value)
+    try:
+        atr_value = _resolve_atr_value(signal_payload)
+    except Exception as exc:
+        _diag_event("error", "atr_resolution_failed", symbol=symbol, error=str(exc))
+        atr_value = 0.0
+
+    try:
+        signal_context = _build_signal_context(signal_payload, signal_scoring, raw_signal, signal, atr_value)
+    except Exception as exc:
+        _diag_event("error", "signal_context_failed", symbol=symbol, error=str(exc))
+        signal_context = {"signal": signal, "raw_signal": raw_signal, "score": signal_scoring.get("score", 0.0)}
 
     if signal == "sell" and not bool(state.get("auto_trade_allow_sell", True)):
         _diag_event("skip", "sell_disabled", symbol=symbol, signal=signal)

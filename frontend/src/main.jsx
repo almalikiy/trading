@@ -1,18 +1,17 @@
-
-import React from "react";
+import React, { Suspense, lazy, useState } from "react";
 import ReactDOM from "react-dom/client";
-import Layout from "./Layout";
 import { ThemeProvider, createTheme, CssBaseline } from "@mui/material";
-import App from "./App";
-import TradeHistory from "./TradeHistory";
-import AccountMonitor from "./AccountMonitor";
-import AdaptiveInsights from "./AdaptiveInsights";
-import { useState } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
+import Layout from "./Layout";
+
+const App = lazy(() => import("./legacy/App"));
+const TradeHistory = lazy(() => import("./TradeHistory"));
+const AccountMonitor = lazy(() => import("./AccountMonitor"));
+const AdaptiveInsights = lazy(() => import("./AdaptiveInsights"));
+const DashboardPage = lazy(() => import("./features/dashboard/DashboardPage"));
+
 function Root() {
-  // Override Root component to include dark mode state
-  // Normally, can be start using ReacthDOM.createRoot(document.getElementById("root")).render(<App />);
   const [darkMode, setDarkMode] = useState(false);
 
   const theme = createTheme({
@@ -30,19 +29,24 @@ function Root() {
       <CssBaseline />
       <BrowserRouter>
         <Layout darkMode={darkMode} setDarkMode={setDarkMode}>
-          <Routes>
-            <Route path="/" element={<App  />} />
-            <Route path="/history" element={<TradeHistory />} />
-            <Route path="/account" element={<AccountMonitor />} />
-            <Route path="/adaptive" element={<AdaptiveInsights />} />
-          </Routes>
+          <Suspense fallback={<div style={{ padding: 24 }}>Loading dashboard…</div>}>
+            <Routes>
+              <Route path="/" element={<DashboardPage />} />
+              <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/history" element={<TradeHistory />} />
+              <Route path="/account" element={<AccountMonitor />} />
+              <Route path="/adaptive" element={<AdaptiveInsights />} />
+              <Route path="/legacy" element={<App />} />
+            </Routes>
+          </Suspense>
         </Layout>
       </BrowserRouter>
     </ThemeProvider>
   );
 }
+
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <Root />
-  </React.StrictMode>
+  </React.StrictMode>,
 );

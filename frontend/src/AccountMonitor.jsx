@@ -20,7 +20,8 @@ import {
   Alert,
 } from "@mui/material";
 
-const API_BASE = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+import { API_BASE } from "./config/backend";
+import { fetchJson, postJson } from "./services/api";
 const BROKERS_CACHE_KEY = "dashboard_brokers_cache_v1";
 const DEFAULT_MULTI_TFS = ["M1", "M5", "M15", "M30"];
 
@@ -92,9 +93,9 @@ export default function AccountMonitor() {
   const [autoTradeRiskHybridAddonMode, setAutoTradeRiskHybridAddonMode] = useState("balance_scaled");
   const [autoTradeRiskAdaptiveWindowDays, setAutoTradeRiskAdaptiveWindowDays] = useState(90);
   const [autoTradeRiskAdaptiveMinTrades, setAutoTradeRiskAdaptiveMinTrades] = useState(12);
-  const [autoTradeHedgeEnabled, setAutoTradeHedgeEnabled] = useState(true);
-  const [autoTradeHedgeThreshold, setAutoTradeHedgeThreshold] = useState(-0.05);
-  const [autoTradeHedgeSlots, setAutoTradeHedgeSlots] = useState(2);
+  const [autoTradeHedgeEnabled, setAutoTradeHedgeEnabled] = useState(false);
+  const [autoTradeHedgeThreshold, setAutoTradeHedgeThreshold] = useState(-0.08);
+  const [autoTradeHedgeSlots, setAutoTradeHedgeSlots] = useState(3);
   const [autoTradeRiskPercent, setAutoTradeRiskPercent] = useState(1);
   const [autoTradeUseAccountBalance, setAutoTradeUseAccountBalance] = useState(true);
   const [autoTradeUseAvailableMargin, setAutoTradeUseAvailableMargin] = useState(true);
@@ -157,8 +158,7 @@ export default function AccountMonitor() {
 
   // Fetch enable_real_trade from backend on mount
   useEffect(() => {
-    fetch(`${API_BASE}/account/state`)
-      .then(res => res.json())
+    fetchJson(`${API_BASE}/account/state`)
       .then(data => {
         setState(data);
         if (typeof data.enable_real_trade === 'boolean') {
@@ -229,14 +229,12 @@ export default function AccountMonitor() {
   }, []);
 
   useEffect(() => {
-    fetch(`${API_BASE}/account/state`)
-      .then(res => res.json())
+    fetchJson(`${API_BASE}/account/state`)
       .then(data => setState(data));
   }, []);
 
   const loadBrokers = () => {
-    fetch(`${API_BASE}/brokers?include_inactive=true`)
-      .then(res => res.json())
+    fetchJson(`${API_BASE}/brokers?include_inactive=true`)
       .then(data => {
         const items = Array.isArray(data) ? data : [];
         if (items.length > 0) {
@@ -283,39 +281,22 @@ export default function AccountMonitor() {
   // Persist enableMT5 to localStorage and backend whenever it changes
   useEffect(() => {
     localStorage.setItem('enableMT5', enableMT5);
-    fetch(`${API_BASE}/account/set_enable_real_trade`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(enableMT5)
-    });
+    postJson(`${API_BASE}/account/set_enable_real_trade`, enableMT5).catch(() => {});
   }, [enableMT5]);
 
   useEffect(() => {
     if (!runtimeLoaded) return;
-    fetch(`${API_BASE}/account/set_auto_trade_enabled`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(autoTradeEnabled)
-    });
+    postJson(`${API_BASE}/account/set_auto_trade_enabled`, autoTradeEnabled).catch(() => {});
   }, [autoTradeEnabled, runtimeLoaded]);
 
   useEffect(() => {
     if (!runtimeLoaded) return;
-    fetch(`${API_BASE}/account/set_keep_terminal_alive`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(keepTerminalAlive)
-    });
+    postJson(`${API_BASE}/account/set_keep_terminal_alive`, keepTerminalAlive).catch(() => {});
   }, [keepTerminalAlive, runtimeLoaded]);
 
   useEffect(() => {
     if (!runtimeLoaded || !dataFeedBrokerId) return;
-    fetch(`${API_BASE}/account/set_data_feed_broker`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(Number(dataFeedBrokerId))
-    })
-      .then((res) => res.json())
+    postJson(`${API_BASE}/account/set_data_feed_broker`, Number(dataFeedBrokerId))
       .then((data) => {
         if (data && data.status === "ok" && data.auto_trade_symbol) {
           setAutoTradeSymbol(String(data.auto_trade_symbol));
@@ -328,51 +309,26 @@ export default function AccountMonitor() {
   }, [dataFeedBrokerId, runtimeLoaded]);
 
   const handleDeposit = () => {
-    fetch(`${API_BASE}/account/deposit`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(deposit)
-    }).then(() => window.location.reload());
+    postJson(`${API_BASE}/account/deposit`, deposit).then(() => window.location.reload());
   };
   const handleWithdraw = () => {
-    fetch(`${API_BASE}/account/withdraw`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(withdraw)
-    }).then(() => window.location.reload());
+    postJson(`${API_BASE}/account/withdraw`, withdraw).then(() => window.location.reload());
   };
   const handleAdjust = () => {
-    fetch(`${API_BASE}/account/adjustment`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ amount: adjust, note: adjustNote })
-    }).then(() => window.location.reload());
+    postJson(`${API_BASE}/account/adjustment`, { amount: adjust, note: adjustNote }).then(() => window.location.reload());
   };
   const handleInitBalance = () => {
-    fetch(`${API_BASE}/account/set_initial_balance`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(initBalance)
-    }).then(() => window.location.reload());
+    postJson(`${API_BASE}/account/set_initial_balance`, initBalance).then(() => window.location.reload());
   };
   const handleLot = () => {
-    fetch(`${API_BASE}/account/set_lot`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(lot)
-    }).then(() => window.location.reload());
+    postJson(`${API_BASE}/account/set_lot`, lot).then(() => window.location.reload());
   };
   const handleMaxOpen = () => {
-    fetch(`${API_BASE}/account/set_max_open_trades`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(maxOpen)
-    }).then(() => window.location.reload());
+    postJson(`${API_BASE}/account/set_max_open_trades`, maxOpen).then(() => window.location.reload());
   };
 
   const refreshAccountState = async () => {
-    const res = await fetch(`${API_BASE}/account/state`);
-    const data = await res.json();
+    const data = await fetchJson(`${API_BASE}/account/state`);
     setState(data);
     setAutoTradeSymbol(String(data.auto_trade_symbol || "XAUUSD"));
     setAutoTradeIntervalSec(Number(data.auto_trade_interval_sec || 2));
@@ -458,9 +414,8 @@ export default function AccountMonitor() {
   const loadAutoTradeConstraints = async ({ normalizeLot = true } = {}) => {
     setAutoTradeConstraintsLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/account/auto_trade_constraints`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.status === "error") {
+      const data = await fetchJson(`${API_BASE}/account/auto_trade_constraints`);
+      if (data.status === "error") {
         throw new Error(data.message || data.detail || "Gagal mengambil batasan auto-trade.");
       }
       setAutoTradeConstraints(data);
@@ -506,70 +461,65 @@ export default function AccountMonitor() {
     const safeMaxOpen = Math.max(1, Number(maxOpen || 1));
     setAutoTradeConfigSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/account/set_auto_trade_config`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          interval_sec: safeInterval,
-          auto_analytic_tpsl: autoAnalyticTpSl,
-          tp_value: Number(autoTradeTpValue || 0),
-          sl_value: Number(autoTradeSlValue || 0),
-          lot: safeLot,
-          max_open_trades: safeMaxOpen,
-          risk_mode: autoTradeRiskMode,
-          risk_selector_strategy: autoTradeRiskSelectorStrategy,
-          risk_atr_threshold: Number(autoTradeRiskAtrThreshold || 0),
-          risk_balance_fixed_threshold: Number(autoTradeRiskBalanceFixedThreshold || 0),
-          risk_confidence_threshold: Number(autoTradeRiskConfidenceThreshold || 0),
-          risk_spread_fixed_threshold: Number(autoTradeRiskSpreadFixedThreshold || 0),
-          risk_spread_low_threshold: Number(autoTradeRiskSpreadLowThreshold || 0),
-          risk_hybrid_addon_rr_threshold: Number(autoTradeRiskHybridAddonRrThreshold || 2),
-          risk_hybrid_entry_mode: autoTradeRiskHybridEntryMode,
-          risk_hybrid_addon_mode: autoTradeRiskHybridAddonMode,
-          risk_adaptive_window_days: Number(autoTradeRiskAdaptiveWindowDays || 90),
-          risk_adaptive_min_trades: Number(autoTradeRiskAdaptiveMinTrades || 12),
-          hedge_enabled: !!autoTradeHedgeEnabled,
-          hedge_threshold: Number(autoTradeHedgeThreshold || -0.05),
-          hedge_slots: Math.max(0, Number(autoTradeHedgeSlots || 0)),
-          risk_percent: Number(autoTradeRiskPercent || 1),
-          use_account_balance: !!autoTradeUseAccountBalance,
-          use_available_margin: !!autoTradeUseAvailableMargin,
-          min_free_margin_pct: Number(autoTradeMinFreeMarginPct || 0),
-          max_margin_usage_pct: Number(autoTradeMaxMarginUsagePct || 0),
-          max_spread_points: Number(autoTradeMaxSpreadPoints || 0),
-          min_signal_score: Number(autoTradeMinSignalScore || 0),
-          allow_sell: !!autoTradeAllowSell,
-          cooldown_sec: Number(autoTradeCooldownSec || 0),
-          session_start_hour: Number(autoTradeSessionStartHour || 0),
-          session_end_hour: Number(autoTradeSessionEndHour || 24),
-          use_atr_tpsl: !!autoTradeUseAtrTpSl,
-          atr_period: Number(autoTradeAtrPeriod || 14),
-          atr_sl_mult: Number(autoTradeAtrSlMult || 1.5),
-          atr_tp_mult: Number(autoTradeAtrTpMult || 2.5),
-          trailing_enabled: !!autoTradeTrailingEnabled,
-          trailing_activation_rr: Number(autoTradeTrailingActivationRr || 1),
-          trailing_atr_mult: Number(autoTradeTrailingAtrMult || 1),
-          confidence_model: autoTradeConfidenceModel,
-          confidence_threshold: Number(autoTradeConfidenceThreshold || 0.6),
-          timeframes: parseMultiTimeframes(autoTradeTimeframes),
-          tf_weight_m1: Number(autoTradeTfWeightM1 || 0),
-          tf_weight_m5: Number(autoTradeTfWeightM5 || 0),
-          tf_weight_m15: Number(autoTradeTfWeightM15 || 0),
-          tf_weight_m30: Number(autoTradeTfWeightM30 || 0),
-          partial_tp_enabled: !!autoTradePartialTpEnabled,
-          partial_tp_rr1: Number(autoTradePartialTpRr1 || 1),
-          partial_tp_close_pct1: Number(autoTradePartialTpClosePct1 || 0),
-          partial_tp_rr2: Number(autoTradePartialTpRr2 || 2),
-          partial_tp_close_pct2: Number(autoTradePartialTpClosePct2 || 0),
-          break_even_enabled: !!autoTradeBreakEvenEnabled,
-          break_even_rr: Number(autoTradeBreakEvenRr || 1),
-          break_even_offset_atr_mult: Number(autoTradeBreakEvenOffsetAtrMult || 0),
-          trailing_mode: autoTradeTrailingMode,
-          stateful_trail_buffer_atr_mult: Number(autoTradeStatefulTrailBufferAtrMult || 0),
-        }),
+      const data = await postJson(`${API_BASE}/account/set_auto_trade_config`, {
+        interval_sec: safeInterval,
+        auto_analytic_tpsl: autoAnalyticTpSl,
+        tp_value: Number(autoTradeTpValue || 0),
+        sl_value: Number(autoTradeSlValue || 0),
+        lot: safeLot,
+        max_open_trades: safeMaxOpen,
+        risk_mode: autoTradeRiskMode,
+        risk_selector_strategy: autoTradeRiskSelectorStrategy,
+        risk_atr_threshold: Number(autoTradeRiskAtrThreshold || 0),
+        risk_balance_fixed_threshold: Number(autoTradeRiskBalanceFixedThreshold || 0),
+        risk_confidence_threshold: Number(autoTradeRiskConfidenceThreshold || 0),
+        risk_spread_fixed_threshold: Number(autoTradeRiskSpreadFixedThreshold || 0),
+        risk_spread_low_threshold: Number(autoTradeRiskSpreadLowThreshold || 0),
+        risk_hybrid_addon_rr_threshold: Number(autoTradeRiskHybridAddonRrThreshold || 2),
+        risk_hybrid_entry_mode: autoTradeRiskHybridEntryMode,
+        risk_hybrid_addon_mode: autoTradeRiskHybridAddonMode,
+        risk_adaptive_window_days: Number(autoTradeRiskAdaptiveWindowDays || 90),
+        risk_adaptive_min_trades: Number(autoTradeRiskAdaptiveMinTrades || 12),
+        hedge_enabled: !!autoTradeHedgeEnabled,
+        hedge_threshold: Number(autoTradeHedgeThreshold || -0.05),
+        hedge_slots: Math.max(0, Number(autoTradeHedgeSlots || 0)),
+        risk_percent: Number(autoTradeRiskPercent || 1),
+        use_account_balance: !!autoTradeUseAccountBalance,
+        use_available_margin: !!autoTradeUseAvailableMargin,
+        min_free_margin_pct: Number(autoTradeMinFreeMarginPct || 0),
+        max_margin_usage_pct: Number(autoTradeMaxMarginUsagePct || 0),
+        max_spread_points: Number(autoTradeMaxSpreadPoints || 0),
+        min_signal_score: Number(autoTradeMinSignalScore || 0),
+        allow_sell: !!autoTradeAllowSell,
+        cooldown_sec: Number(autoTradeCooldownSec || 0),
+        session_start_hour: Number(autoTradeSessionStartHour || 0),
+        session_end_hour: Number(autoTradeSessionEndHour || 24),
+        use_atr_tpsl: !!autoTradeUseAtrTpSl,
+        atr_period: Number(autoTradeAtrPeriod || 14),
+        atr_sl_mult: Number(autoTradeAtrSlMult || 1.5),
+        atr_tp_mult: Number(autoTradeAtrTpMult || 2.5),
+        trailing_enabled: !!autoTradeTrailingEnabled,
+        trailing_activation_rr: Number(autoTradeTrailingActivationRr || 1),
+        trailing_atr_mult: Number(autoTradeTrailingAtrMult || 1),
+        confidence_model: autoTradeConfidenceModel,
+        confidence_threshold: Number(autoTradeConfidenceThreshold || 0.6),
+        timeframes: parseMultiTimeframes(autoTradeTimeframes),
+        tf_weight_m1: Number(autoTradeTfWeightM1 || 0),
+        tf_weight_m5: Number(autoTradeTfWeightM5 || 0),
+        tf_weight_m15: Number(autoTradeTfWeightM15 || 0),
+        tf_weight_m30: Number(autoTradeTfWeightM30 || 0),
+        partial_tp_enabled: !!autoTradePartialTpEnabled,
+        partial_tp_rr1: Number(autoTradePartialTpRr1 || 1),
+        partial_tp_close_pct1: Number(autoTradePartialTpClosePct1 || 0),
+        partial_tp_rr2: Number(autoTradePartialTpRr2 || 2),
+        partial_tp_close_pct2: Number(autoTradePartialTpClosePct2 || 0),
+        break_even_enabled: !!autoTradeBreakEvenEnabled,
+        break_even_rr: Number(autoTradeBreakEvenRr || 1),
+        break_even_offset_atr_mult: Number(autoTradeBreakEvenOffsetAtrMult || 0),
+        trailing_mode: autoTradeTrailingMode,
+        stateful_trail_buffer_atr_mult: Number(autoTradeStatefulTrailBufferAtrMult || 0),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.status === "error") {
+      if (data.status === "error") {
         throw new Error(data.message || data.detail || "Gagal menyimpan konfigurasi auto-trade.");
       }
       await refreshAccountState();
@@ -595,16 +545,11 @@ export default function AccountMonitor() {
     const days = Math.max(1, Number(tradeHistorySyncDays || 90));
     setTradeHistorySyncSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/account/set_trade_history_sync`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sync_all: tradeHistorySyncMode === "all",
-          days,
-        }),
+      const data = await postJson(`${API_BASE}/account/set_trade_history_sync`, {
+        sync_all: tradeHistorySyncMode === "all",
+        days,
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.status === "error") {
+      if (data.status === "error") {
         throw new Error(data.message || data.detail || "Gagal menyimpan konfigurasi sync history.");
       }
       await refreshAccountState();
@@ -619,12 +564,8 @@ export default function AccountMonitor() {
   const runTradeHistorySync = async () => {
     setTradeHistorySyncRunning(true);
     try {
-      const res = await fetch(`${API_BASE}/trade/sync_history`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.status === "error") {
+      const data = await postJson(`${API_BASE}/trade/sync_history`, {});
+      if (data.status === "error") {
         throw new Error(data.message || data.detail || "Sinkronisasi history gagal.");
       }
       const label = data.trade_history_sync_all ? "semua history" : `${data.trade_history_sync_days} hari`;
@@ -654,9 +595,8 @@ export default function AccountMonitor() {
     setMlBusy((prev) => ({ ...prev, dataset: true }));
     try {
       const safeLimit = Math.max(10, Math.min(5000, Number(mlDatasetLimit || 50)));
-      const res = await fetch(`${API_BASE}/account/auto_trade_ml_dataset?limit=${safeLimit}`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.status === "error") {
+      const data = await fetchJson(`${API_BASE}/account/auto_trade_ml_dataset?limit=${safeLimit}`);
+      if (data.status === "error") {
         throw new Error(data.message || data.detail || "Gagal mengambil dataset ML.");
       }
       const rows = Array.isArray(data.dataset) ? data.dataset : [];
@@ -673,11 +613,8 @@ export default function AccountMonitor() {
     setMlBusy((prev) => ({ ...prev, train: true }));
     try {
       const safeLimit = Math.max(100, Math.min(50000, Number(mlExportLimit || 5000)));
-      const res = await fetch(`${API_BASE}/account/auto_trade_ml_train?limit=${safeLimit}`, {
-        method: "POST",
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.status === "error") {
+      const data = await postJson(`${API_BASE}/account/auto_trade_ml_train?limit=${safeLimit}`, {});
+      if (data.status === "error") {
         throw new Error(data.message || data.detail || "Retrain model gagal.");
       }
       const trained = !!(data.result && data.result.trained);
@@ -697,13 +634,8 @@ export default function AccountMonitor() {
     setMlBusy((prev) => ({ ...prev, export: true }));
     try {
       const safeLimit = Math.max(100, Math.min(200000, Number(mlExportLimit || 10000)));
-      const res = await fetch(`${API_BASE}/account/auto_trade_ml_export`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ format: mlExportFormat, limit: safeLimit }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.status === "error") {
+      const data = await postJson(`${API_BASE}/account/auto_trade_ml_export`, { format: mlExportFormat, limit: safeLimit });
+      if (data.status === "error") {
         throw new Error(data.message || data.detail || "Export dataset ML gagal.");
       }
       setMlLastExport(data.export || null);
@@ -737,14 +669,8 @@ export default function AccountMonitor() {
 
     setAddingBroker(true);
     try {
-      const res = await fetch(`${API_BASE}/brokers`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
+      const data = await postJson(`${API_BASE}/brokers`, payload);
+      if (data?.detail) {
         const msg = data?.detail || "Gagal menambah broker.";
         setSnackbar({ open: true, severity: "error", message: String(msg) });
         return;
@@ -784,14 +710,13 @@ const saveBroker = async () => {
   };
 
   try {
-    const res = await fetch(`${API_BASE}/brokers/${editingBroker.id}`, {
+    const data = await fetchJson(`${API_BASE}/brokers/${editingBroker.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
 
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
+    if (data?.detail) {
       const msg = data?.detail || "Gagal update broker.";
       setSnackbar({ open: true, severity: "error", message: String(msg) });
       return;
@@ -814,12 +739,12 @@ const saveBroker = async () => {
 };
 
 const setDefaultBroker = async (id) => {
-    await fetch(`${API_BASE}/brokers/${id}/set_default`, { method: "POST" });
+    await fetchJson(`${API_BASE}/brokers/${id}/set_default`, { method: "POST" });
     loadBrokers();
   };
 
   const toggleBrokerActive = async (broker) => {
-    await fetch(`${API_BASE}/brokers/${broker.id}`, {
+    await fetchJson(`${API_BASE}/brokers/${broker.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ is_active: !broker.is_active }),
@@ -828,13 +753,13 @@ const setDefaultBroker = async (id) => {
   };
 
   const deleteBroker = async (id) => {
-    await fetch(`${API_BASE}/brokers/${id}`, { method: "DELETE" });
+    await fetchJson(`${API_BASE}/brokers/${id}`, { method: "DELETE" });
     loadBrokers();
   };
 
   const updateBrokerMode = async (broker, mode) => {
     const safeMode = String(broker.platform || "").toLowerCase() === "mt4" ? "mouse" : mode;
-    await fetch(`${API_BASE}/brokers/${broker.id}`, {
+    await fetchJson(`${API_BASE}/brokers/${broker.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ execution_mode: safeMode }),

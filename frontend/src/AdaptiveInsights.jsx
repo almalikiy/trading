@@ -21,7 +21,8 @@ import {
   Typography,
 } from "@mui/material";
 
-const API_BASE = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+import { API_BASE } from "./config/backend";
+import { fetchJson } from "./services/api";
 
 function formatTradeTime(epochSeconds) {
   if (!epochSeconds) return "-";
@@ -71,9 +72,7 @@ export default function AdaptiveInsights() {
 
   const refreshBrokers = async () => {
     try {
-      const res = await fetch(`${API_BASE}/brokers?include_inactive=true`);
-      const data = await res.json().catch(() => []);
-      if (!res.ok) throw new Error("Gagal mengambil daftar broker.");
+      const data = await fetchJson(`${API_BASE}/brokers?include_inactive=true`);
       setBrokers(Array.isArray(data) ? data : []);
     } catch {
       setBrokers([]);
@@ -91,9 +90,8 @@ export default function AdaptiveInsights() {
       const sinceEpoch = Math.floor(Date.now() / 1000) - (Math.max(1, Number(sinceMinutes || 180)) * 60);
       params.set("since", String(sinceEpoch));
 
-      const res = await fetch(`${API_BASE}/account/auto_trade_events?${params.toString()}`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.status === "error") {
+      const data = await fetchJson(`${API_BASE}/account/auto_trade_events?${params.toString()}`);
+      if (data.status === "error") {
         throw new Error(data.message || "Gagal mengambil adaptive events.");
       }
 
@@ -116,9 +114,8 @@ export default function AdaptiveInsights() {
       if (brokerId) params.set("broker_id", String(brokerId));
       if (accountId) params.set("account_id", String(accountId));
 
-      const res = await fetch(`${API_BASE}/account/auto_trade_stats?${params.toString()}`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.status === "error") {
+      const data = await fetchJson(`${API_BASE}/account/auto_trade_stats?${params.toString()}`);
+      if (data.status === "error") {
         throw new Error(data.message || "Gagal mengambil statistik adaptive.");
       }
       setStats(data.stats || null);
@@ -138,9 +135,8 @@ export default function AdaptiveInsights() {
       params.set("limit", "120");
       if (brokerId) params.set("broker_id", String(brokerId));
       if (accountId) params.set("account_id", String(accountId));
-      const res = await fetch(`${API_BASE}/account/auto_trade_close_decision_dataset?${params.toString()}`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.status === "error") {
+      const data = await fetchJson(`${API_BASE}/account/auto_trade_close_decision_dataset?${params.toString()}`);
+      if (data.status === "error") {
         throw new Error(data.message || "Gagal mengambil close-decision dataset.");
       }
       setCloseDataset(Array.isArray(data.dataset) ? data.dataset : []);

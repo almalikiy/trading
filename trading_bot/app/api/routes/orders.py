@@ -24,25 +24,44 @@ class OrderPayload(BaseModel):
     max_lot: Decimal | None = Field(default=None, gt=0)
     max_daily_loss_pct: Decimal | None = Field(default=None, gt=0)
     max_drawdown_pct: Decimal | None = Field(default=None, gt=0)
+    current_drawdown_pct: Decimal | None = Field(default=None, ge=0)
     min_margin_buffer_pct: Decimal | None = Field(default=None, gt=0)
     daily_loss_pct: Decimal | None = Field(default=None)
     max_open_positions: int | None = Field(default=None, ge=0)
+    kill_switch_enabled: bool | None = Field(default=None, description="Override global kill switch for a specific order request")
 
 
 @router.get("")
-async def list_orders() -> list[dict[str, str]]:
-    return [{"status": "not_implemented"}]
+async def list_orders() -> list[dict[str, object]]:
+    try:
+        from trading_bot.app.state_store import list_brokers
+
+        brokers = list_brokers(include_inactive=True)
+        return [
+            {
+                "broker": broker.get("name") or broker.get("platform") or "unknown",
+                "platform": broker.get("platform") or "unknown",
+                "symbol": broker.get("default_symbol") or "XAUUSD",
+                "execution_mode": broker.get("execution_mode") or "mouse",
+                "is_active": bool(broker.get("is_active")),
+                "status": "ready" if broker.get("is_active") else "inactive",
+            }
+            for broker in brokers
+        ]
+    except Exception:
+        return []
 
 
 @router.post("")
 async def create_order(payload: OrderPayload) -> dict[str, object]:
     settings = get_settings()
     guard = ProductionGuardService(
-        max_lot=payload.max_lot or settings.max_lot,
-        max_daily_loss_pct=payload.max_daily_loss_pct or settings.max_daily_loss_pct,
-        max_drawdown_pct=payload.max_drawdown_pct or settings.max_drawdown_pct,
-        min_margin_buffer_pct=payload.min_margin_buffer_pct or settings.min_margin_buffer_pct,
+        max_lot=payload.max_lot if payload.max_lot is not None else settings.max_lot,
+        max_daily_loss_pct=payload.max_daily_loss_pct if payload.max_daily_loss_pct is not None else settings.max_daily_loss_pct,
+        max_drawdown_pct=payload.max_drawdown_pct if payload.max_drawdown_pct is not None else settings.max_drawdown_pct,
+        min_margin_buffer_pct=payload.min_margin_buffer_pct if payload.min_margin_buffer_pct is not None else settings.min_margin_buffer_pct,
         max_open_positions=payload.max_open_positions if payload.max_open_positions is not None else settings.max_open_positions,
+        kill_switch_enabled=(payload.kill_switch_enabled if payload.kill_switch_enabled is not None else settings.kill_switch_enabled),
     )
 
     validation = await guard.validate_order_request(
@@ -50,12 +69,14 @@ async def create_order(payload: OrderPayload) -> dict[str, object]:
         symbol=payload.symbol,
         side=payload.side,
         volume=payload.volume,
-        max_lot=payload.max_lot or settings.max_lot,
-        max_daily_loss_pct=payload.max_daily_loss_pct or settings.max_daily_loss_pct,
-        max_drawdown_pct=payload.max_drawdown_pct or settings.max_drawdown_pct,
-        min_margin_buffer_pct=payload.min_margin_buffer_pct or settings.min_margin_buffer_pct,
+        max_lot=payload.max_lot if payload.max_lot is not None else settings.max_lot,
+        max_daily_loss_pct=payload.max_daily_loss_pct if payload.max_daily_loss_pct is not None else settings.max_daily_loss_pct,
+        max_drawdown_pct=payload.max_drawdown_pct if payload.max_drawdown_pct is not None else settings.max_drawdown_pct,
+        current_drawdown_pct=payload.current_drawdown_pct,
+        min_margin_buffer_pct=payload.min_margin_buffer_pct if payload.min_margin_buffer_pct is not None else settings.min_margin_buffer_pct,
         daily_loss_pct=payload.daily_loss_pct,
         max_open_positions=(payload.max_open_positions if payload.max_open_positions is not None else settings.max_open_positions),
+        kill_switch_enabled=(payload.kill_switch_enabled if payload.kill_switch_enabled is not None else settings.kill_switch_enabled),
     )
 
     if not validation["allowed"]:

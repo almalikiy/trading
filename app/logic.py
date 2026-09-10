@@ -307,6 +307,26 @@ def _start_background_refresh(cache_kind, key, worker):
     def runner():
         try:
             worker()
+        except Exception as exc:
+            with _cache_lock:
+                if cache_kind == "signal":
+                    _signal_cache[key] = {
+                        "data": {
+                            "signal": "wait",
+                            "indicators": {},
+                            "simulator": {},
+                            "cached": False,
+                            "refreshing": False,
+                            "error": str(exc),
+                        },
+                        "updated_at": time.time(),
+                    }
+                else:
+                    _ohlcv_cache[key] = {
+                        "data": [],
+                        "updated_at": time.time(),
+                        "error": str(exc),
+                    }
         finally:
             with _cache_lock:
                 if cache_kind == "signal":

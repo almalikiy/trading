@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     min_margin_buffer_pct: float = 25.0
     max_lot: float = 0.10
     default_risk_pct: float = 0.5
+    kill_switch_enabled: bool = False
 
     @field_validator("mt5_terminal_path", "mt5_server", "binance_api_key", "binance_api_secret", "stockbit_api_key", "stockbit_api_secret", mode="before")
     @classmethod

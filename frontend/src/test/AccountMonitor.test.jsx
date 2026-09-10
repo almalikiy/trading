@@ -3,7 +3,12 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import AccountMonitor from "../AccountMonitor";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "http://localhost:8001";
+const API_BASES = ["http://localhost:8000", API_BASE];
+
+function matchesBase(fullUrl, path) {
+  return API_BASES.some((base) => fullUrl === `${base}${path}` || fullUrl.startsWith(`${base}${path}`));
+}
 
 function jsonResponse(payload, ok = true, status = 200) {
   return Promise.resolve({
@@ -18,7 +23,7 @@ function createFetchMock({ trainShouldFail = false, hedgeEnabled = true, hedgeTh
     const method = String(options.method || "GET").toUpperCase();
     const fullUrl = String(url || "");
 
-    if (fullUrl === `${API_BASE}/account/state`) {
+    if (matchesBase(fullUrl, "/account/state")) {
       return jsonResponse({
         balance: 1000,
         initial_balance: 1000,
@@ -34,13 +39,13 @@ function createFetchMock({ trainShouldFail = false, hedgeEnabled = true, hedgeTh
       });
     }
 
-    if (fullUrl.startsWith(`${API_BASE}/brokers?`)) {
+    if (API_BASES.some((base) => fullUrl.startsWith(`${base}/brokers?`))) {
       return jsonResponse([
         { id: 1, name: "Default Broker", platform: "mt5", execution_mode: "direct", is_active: true },
       ]);
     }
 
-    if (fullUrl === `${API_BASE}/account/auto_trade_constraints`) {
+    if (matchesBase(fullUrl, "/account/auto_trade_constraints")) {
       return jsonResponse({
         status: "ok",
         symbol: "XAUUSD",
@@ -52,7 +57,7 @@ function createFetchMock({ trainShouldFail = false, hedgeEnabled = true, hedgeTh
       return jsonResponse({ status: "ok" });
     }
 
-    if (fullUrl.startsWith(`${API_BASE}/account/auto_trade_ml_dataset`) && method === "GET") {
+    if (fullUrl.includes("/account/auto_trade_ml_dataset") && method === "GET") {
       return jsonResponse({
         status: "ok",
         rows: 1,
@@ -68,7 +73,7 @@ function createFetchMock({ trainShouldFail = false, hedgeEnabled = true, hedgeTh
       });
     }
 
-    if (fullUrl.startsWith(`${API_BASE}/account/auto_trade_ml_train`) && method === "POST") {
+    if (fullUrl.includes("/account/auto_trade_ml_train") && method === "POST") {
       if (trainShouldFail) {
         return jsonResponse({ status: "error", message: "train failed" }, false, 500);
       }
@@ -79,7 +84,7 @@ function createFetchMock({ trainShouldFail = false, hedgeEnabled = true, hedgeTh
       });
     }
 
-    if (fullUrl === `${API_BASE}/account/auto_trade_ml_export` && method === "POST") {
+    if (matchesBase(fullUrl, "/account/auto_trade_ml_export") && method === "POST") {
       return jsonResponse({
         status: "ok",
         export: {
@@ -96,7 +101,7 @@ function createFetchMock({ trainShouldFail = false, hedgeEnabled = true, hedgeTh
       return jsonResponse({ status: "ok" });
     }
 
-    if (fullUrl.startsWith(`${API_BASE}/brokers`)) {
+    if (API_BASES.some((base) => fullUrl.startsWith(`${base}/brokers`))) {
       return jsonResponse({ status: "ok" });
     }
 

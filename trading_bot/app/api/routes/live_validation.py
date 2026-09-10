@@ -18,9 +18,11 @@ class LiveValidationPayload(BaseModel):
     max_lot: Decimal | None = Field(default=None, gt=0, description="Operational cap for this validation")
     max_daily_loss_pct: Decimal | None = Field(default=None, gt=0, description="Daily loss cap in percent")
     max_drawdown_pct: Decimal | None = Field(default=None, gt=0, description="Drawdown cap in percent")
+    current_drawdown_pct: Decimal | None = Field(default=None, ge=0, description="Current portfolio drawdown percent")
     min_margin_buffer_pct: Decimal | None = Field(default=None, gt=0, description="Minimum margin buffer in percent")
     daily_loss_pct: Decimal | None = Field(default=None, description="Current realized daily loss percent")
     max_open_positions: int | None = Field(default=None, ge=0, description="Current open positions cap")
+    kill_switch_enabled: bool | None = Field(default=None, description="Override current kill-switch state for this validation")
 
 
 @router.post("")
@@ -34,9 +36,11 @@ async def validate_live_broker(payload: LiveValidationPayload) -> dict[str, obje
         max_lot=payload.max_lot,
         max_daily_loss_pct=payload.max_daily_loss_pct,
         max_drawdown_pct=payload.max_drawdown_pct,
+        current_drawdown_pct=payload.current_drawdown_pct,
         min_margin_buffer_pct=payload.min_margin_buffer_pct,
         daily_loss_pct=payload.daily_loss_pct,
         max_open_positions=payload.max_open_positions,
+        kill_switch_enabled=payload.kill_switch_enabled,
     )
 
     if not result["allowed"]:

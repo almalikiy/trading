@@ -28,6 +28,7 @@ class ProductionGuardService:
         max_drawdown_pct: Decimal | float | None = None,
         min_margin_buffer_pct: Decimal | float | None = None,
         max_open_positions: int | None = None,
+        kill_switch_enabled: bool | None = None,
     ) -> None:
         settings = get_settings()
         self.max_lot = Decimal(str(max_lot)) if max_lot is not None else Decimal(str(settings.max_lot))
@@ -35,6 +36,7 @@ class ProductionGuardService:
         self.max_drawdown_pct = Decimal(str(max_drawdown_pct)) if max_drawdown_pct is not None else Decimal(str(settings.max_drawdown_pct))
         self.min_margin_buffer_pct = Decimal(str(min_margin_buffer_pct)) if min_margin_buffer_pct is not None else Decimal(str(settings.min_margin_buffer_pct))
         self.max_open_positions = max_open_positions if max_open_positions is not None else settings.max_open_positions
+        self.kill_switch_enabled = settings.kill_switch_enabled if kill_switch_enabled is None else bool(kill_switch_enabled)
         self.alert_service = OperationalAlertService()
 
     async def validate_order_request(
@@ -48,11 +50,18 @@ class ProductionGuardService:
         max_drawdown_pct: Decimal | float | None = None,
         min_margin_buffer_pct: Decimal | float | None = None,
         daily_loss_pct: Decimal | float | None = None,
+        current_drawdown_pct: Decimal | float | None = None,
         max_open_positions: int | None = None,
+        kill_switch_enabled: bool | None = None,
     ) -> dict[str, Any]:
         self.alert_service = OperationalAlertService()
         broker = BrokerFactory.create(str(broker_name).strip())
         errors: list[str] = []
+
+        active_kill_switch = self.kill_switch_enabled if kill_switch_enabled is None else bool(kill_switch_enabled)
+        if active_kill_switch:
+            errors.append("kill_switch_enabled")
+            self.alert_service.add("kill_switch_enabled", "Trading is disabled by operational kill switch", level="critical")
 
         try:
             if hasattr(broker, "connected") and not getattr(broker, "connected", False):
@@ -140,13 +149,14 @@ class ProductionGuardService:
                     level="critical",
                 )
 
-        if max_drawdown_pct is not None:
-            drawdown_limit = Decimal(str(max_drawdown_pct)) if max_drawdown_pct is not None else self.max_drawdown_pct
-            if Decimal(str(max_drawdown_pct)) > drawdown_limit:
-                errors.append(f"drawdown_limit_exceeded: {max_drawdown_pct} > {drawdown_limit}")
+        effective_drawdown_limit = Decimal(str(max_drawdown_pct)) if max_drawdown_pct is not None else self.max_drawdown_pct
+        effective_current_drawdown = Decimal(str(current_drawdown_pct)) if current_drawdown_pct is not None else Decimal("0")
+        if current_drawdown_pct is not None:
+            if effective_current_drawdown > effective_drawdown_limit:
+                errors.append(f"drawdown_limit_exceeded: {effective_current_drawdown} > {effective_drawdown_limit}")
                 self.alert_service.add(
                     "drawdown_limit_exceeded",
-                    f"Drawdown threshold {max_drawdown_pct}% exceeds limit {drawdown_limit}%",
+                    f"Current drawdown {effective_current_drawdown}% exceeds configured limit {effective_drawdown_limit}%",
                     level="critical",
                 )
 
@@ -203,6 +213,8 @@ class ProductionGuardService:
                 "max_lot": str(lot_limit),
                 "max_daily_loss_pct": str(max_daily_loss_pct if max_daily_loss_pct is not None else self.max_daily_loss_pct),
                 "max_drawdown_pct": str(max_drawdown_pct if max_drawdown_pct is not None else self.max_drawdown_pct),
+                "current_drawdown_pct": str(current_drawdown_pct if current_drawdown_pct is not None else effective_current_drawdown),
                 "min_margin_buffer_pct": str(min_margin_buffer_pct if min_margin_buffer_pct is not None else self.min_margin_buffer_pct),
+                "kill_switch_enabled": str(active_kill_switch).lower(),
             },
         }

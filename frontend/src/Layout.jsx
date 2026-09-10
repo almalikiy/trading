@@ -39,7 +39,18 @@ export function Layout({ children, darkMode, setDarkMode }) {
   return (
     <Box sx={{ display: "flex", minHeight: "100vh", bgcolor: theme.palette.background.default }}>
       {/* AppBar di atas */}
-      <AppBar position="fixed" color="primary" elevation={3} sx={{ zIndex: theme.zIndex.drawer + 1, background: 'linear-gradient(90deg,#1976d2 0%,#43e97b 100%)' }}>
+      <AppBar
+        position="fixed"
+        elevation={3}
+        sx={{
+          zIndex: theme.zIndex.drawer + 1,
+          background: darkMode
+            ? 'linear-gradient(90deg, rgba(15,23,42,1) 0%, rgba(30,41,59,1) 100%)'
+            : 'linear-gradient(90deg, rgba(25,118,210,1) 0%, rgba(67,233,123,1) 100%)',
+          color: '#fff',
+          borderBottom: `1px solid ${theme.palette.divider}`,
+        }}
+      >
         <Toolbar>
           <IconButton
             color="inherit"
@@ -49,15 +60,20 @@ export function Layout({ children, darkMode, setDarkMode }) {
           >
             <MenuIcon />
           </IconButton>
-          <Typography variant="h6" sx={{ ml: 1, fontWeight: 700, letterSpacing: 1, flexGrow: 1 }}>
-            <span style={{ color: '#fff', letterSpacing: 2 }}>{getTitle()}</span>
+          <Typography variant="h6" sx={{ ml: 1, fontWeight: 700, letterSpacing: 1, flexGrow: 1, color: '#fff' }}>
+            {getTitle()}
           </Typography>
-            <FormControlLabel
-              control={<Switch checked={darkMode} onChange={() => setDarkMode((v) => !v)} 
-                  sx={{ color: darkMode ? theme.palette.success.main : theme.palette.warning.main }} 
-                />}
-              label={darkMode ? "Dark Mode" : "Light Mode"}
-            />
+          <FormControlLabel
+            control={
+              <Switch
+                checked={darkMode}
+                onChange={() => setDarkMode((v) => !v)}
+                sx={{ color: darkMode ? theme.palette.success.main : theme.palette.warning.main }}
+              />
+            }
+            label={darkMode ? "Dark Mode" : "Light Mode"}
+            sx={{ color: '#fff', m: 0 }}
+          />
         </Toolbar>
       </AppBar>
 
@@ -74,29 +90,50 @@ export function Layout({ children, darkMode, setDarkMode }) {
             boxSizing: 'border-box',
             background: theme.palette.background.paper,
             borderRight: `1px solid ${theme.palette.divider}`,
-            boxShadow: '2px 0 8px #0001',
+            boxShadow: darkMode ? '2px 0 12px rgba(0,0,0,0.42)' : '2px 0 10px rgba(15,23,42,0.08)',
             transition: 'width 0.3s',
+            color: theme.palette.text.primary,
           },
         }}
       >
         <Toolbar />
         <Divider />
-        <List>
-          <ListItem button selected={location.pathname === "/"} onClick={() => { navigate("/"); setOpen(false); }} sx={{ borderRadius: 2, mb: 1 }}>
-            <DashboardIcon sx={{ mr: 1, color: location.pathname === "/" ? theme.palette.primary.main : '#888' }} />
-            <ListItemText primary="Dashboard" />
+        <List sx={{ px: 1, py: 1 }}>
+          <ListItem
+            button
+            selected={location.pathname === "/"}
+            onClick={() => { navigate("/"); setOpen(false); }}
+            sx={{ borderRadius: 2, mb: 1, color: theme.palette.text.primary }}
+          >
+            <DashboardIcon sx={{ mr: 1, color: location.pathname === "/" ? theme.palette.primary.main : theme.palette.text.secondary }} />
+            <ListItemText primary="Dashboard" primaryTypographyProps={{ color: 'inherit' }} />
           </ListItem>
-          <ListItem button selected={location.pathname === "/history"} onClick={() => { navigate("/history"); setOpen(false); }} sx={{ borderRadius: 2, mb: 1 }}>
-            <HistoryIcon sx={{ mr: 1, color: location.pathname === "/history" ? theme.palette.primary.main : '#888' }} />
-            <ListItemText primary="Trade History" />
+          <ListItem
+            button
+            selected={location.pathname === "/history"}
+            onClick={() => { navigate("/history"); setOpen(false); }}
+            sx={{ borderRadius: 2, mb: 1, color: theme.palette.text.primary }}
+          >
+            <HistoryIcon sx={{ mr: 1, color: location.pathname === "/history" ? theme.palette.primary.main : theme.palette.text.secondary }} />
+            <ListItemText primary="Trade History" primaryTypographyProps={{ color: 'inherit' }} />
           </ListItem>
-          <ListItem button selected={location.pathname === "/account"} onClick={() => { navigate("/account"); setOpen(false); }} sx={{ borderRadius: 2, mb: 1 }}>
-            <AccountBalanceWalletIcon sx={{ mr: 1, color: location.pathname === "/account" ? theme.palette.primary.main : '#888' }} />
-            <ListItemText primary="Account Monitor" />
+          <ListItem
+            button
+            selected={location.pathname === "/account"}
+            onClick={() => { navigate("/account"); setOpen(false); }}
+            sx={{ borderRadius: 2, mb: 1, color: theme.palette.text.primary }}
+          >
+            <AccountBalanceWalletIcon sx={{ mr: 1, color: location.pathname === "/account" ? theme.palette.primary.main : theme.palette.text.secondary }} />
+            <ListItemText primary="Account Monitor" primaryTypographyProps={{ color: 'inherit' }} />
           </ListItem>
-          <ListItem button selected={location.pathname === "/adaptive"} onClick={() => { navigate("/adaptive"); setOpen(false); }} sx={{ borderRadius: 2, mb: 1 }}>
-            <InsightsIcon sx={{ mr: 1, color: location.pathname === "/adaptive" ? theme.palette.primary.main : '#888' }} />
-            <ListItemText primary="Adaptive Insights" />
+          <ListItem
+            button
+            selected={location.pathname === "/adaptive"}
+            onClick={() => { navigate("/adaptive"); setOpen(false); }}
+            sx={{ borderRadius: 2, mb: 1, color: theme.palette.text.primary }}
+          >
+            <InsightsIcon sx={{ mr: 1, color: location.pathname === "/adaptive" ? theme.palette.primary.main : theme.palette.text.secondary }} />
+            <ListItemText primary="Adaptive Insights" primaryTypographyProps={{ color: 'inherit' }} />
           </ListItem>
         </List>
       </Drawer>

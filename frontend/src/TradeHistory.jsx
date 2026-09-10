@@ -25,7 +25,8 @@ import {
   TableSortLabel,
 } from "@mui/material";
 
-const API_BASE = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+import { API_BASE } from "./config/backend";
+import { fetchJson, postJson } from "./services/api";
 
 function compareValues(a, b, direction = "asc") {
   if (a === b) return 0;
@@ -108,20 +109,17 @@ export default function TradeHistory() {
   const [tradeDetails, setTradeDetails] = useState(null);
 
   const loadTradeHistory = () =>
-    fetch(`${API_BASE}/trade/history`)
-      .then((res) => res.json())
+    fetchJson(`${API_BASE}/trade/history`)
       .then((data) => setHistory(Array.isArray(data) ? data : []));
 
   const loadErrorLog = () =>
-    fetch(`${API_BASE}/mt5/error_log`)
-      .then((res) => res.json())
+    fetchJson(`${API_BASE}/mt5/error_log`)
       .then((data) => setErrorLog(Array.isArray(data) ? data : []));
 
   useEffect(() => {
     loadTradeHistory();
 
-    fetch(`${API_BASE}/mt5/status`)
-      .then(res => res.json())
+    fetchJson(`${API_BASE}/mt5/status`)
       .then(data => setMt5Status(data.connected))
       .catch(() => setMt5Status(false));
 
@@ -197,8 +195,7 @@ export default function TradeHistory() {
 
   const handleForceClose = () => {
     setForceCloseLoading(true);
-    fetch(`${API_BASE}/trade/force_close`, { method: "POST" })
-      .then(res => res.json())
+    postJson(`${API_BASE}/trade/force_close`, {})
       .then(data => {
         setSnackbar({ open: true, message: `Closed: ${data.closed.length}, Errors: ${data.errors.length}`, severity: 'success' });
         return Promise.all([loadTradeHistory(), loadErrorLog()]);
@@ -228,12 +225,7 @@ export default function TradeHistory() {
     setDetailsError("");
     setTradeDetails(null);
     try {
-      const res = await fetch(`${API_BASE}/trade/${encodeURIComponent(identifier)}/details`);
-      if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        throw new Error(payload?.detail || "Gagal memuat detail trade");
-      }
-      const data = await res.json();
+      const data = await fetchJson(`${API_BASE}/trade/${encodeURIComponent(identifier)}/details`);
       setTradeDetails(data);
     } catch (err) {
       setDetailsError(String(err?.message || err));
