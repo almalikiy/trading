@@ -25,6 +25,9 @@ class BinanceBrokerAdapter(BaseAdapter):
         return self.connected
 
     async def get_account_summary(self) -> AccountSummary:
+        if not self.connected:
+            raise RuntimeError("Binance broker is not connected")
+
         return AccountSummary(
             broker=self.name,
             balance=Decimal("0.00"),
@@ -36,29 +39,15 @@ class BinanceBrokerAdapter(BaseAdapter):
         )
 
     async def get_ticker(self, symbol: str) -> SymbolQuote:
-        price = Decimal("50000")
-        return SymbolQuote(
-            symbol=symbol,
-            bid=price,
-            ask=price + Decimal("1.5"),
-            last=price,
-            timestamp=datetime.utcnow(),
-            spread=Decimal("1.5"),
-        )
+        if not self.connected:
+            raise RuntimeError("Binance broker is not connected")
+
+        raise RuntimeError("Binance broker market data is unavailable until a live connection is established")
 
     async def get_ohlcv(self, symbol: str, timeframe: str, limit: int = 200) -> list[Candle]:
-        return [
-            Candle(
-                symbol=symbol,
-                timeframe=timeframe,
-                open=Decimal("49900"),
-                high=Decimal("50100"),
-                low=Decimal("49850"),
-                close=Decimal("50010"),
-                volume=Decimal("10"),
-                timestamp=datetime.utcnow(),
-            )
-        ]
+        if not self.connected:
+            return []
+        return []
 
     async def get_positions(self) -> list[Position]:
         return []
@@ -77,7 +66,7 @@ class BinanceBrokerAdapter(BaseAdapter):
             status=status,
             filled_volume=request.volume,
             average_price=request.price or Decimal("0"),
-            raw_response={"source": "binance_skeleton", "request": request.metadata},
+            raw_response={"source": "binance_adapter", "request": request.metadata},
         )
 
     async def cancel_order(self, order_id: str) -> bool:
@@ -89,7 +78,7 @@ class BinanceBrokerAdapter(BaseAdapter):
     async def get_symbol_info(self, symbol: str) -> dict[str, Any]:
         return {
             "symbol": symbol,
-            "status": "skeleton",
+            "status": "offline",
             "base_precision": 8,
             "quote_precision": 2,
             "min_notional": 10,

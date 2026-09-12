@@ -1,6 +1,6 @@
 {
   "auto_analytic_tpsl": false,
-  "auto_trade_enabled": true,
+  "auto_trade_enabled": false,
   "auto_trade_risk_percent": 1.0,
   "auto_trade_symbol": "XAUUSD",
   "balance": 13.48,

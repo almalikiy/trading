@@ -1,3 +1,3 @@
 """Refactored trading system package."""
 
-__all__ = ["core", "infrastructure", "strategies", "risk", "adapters"]
+__all__ = ["core", "infrastructure", "strategies", "risk", "adapters", "app"]

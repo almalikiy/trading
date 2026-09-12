@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from trading_bot.app.api.deps import get_broker_orchestrator
+from trading_bot.app.persistence.broker_store import list_brokers
 from trading_bot.core.application.production_guard_service import ProductionGuardService
 from trading_bot.core.domain.enums import OrderSide, OrderType
 from trading_bot.core.domain.models import OrderRequest
@@ -34,8 +35,6 @@ class OrderPayload(BaseModel):
 @router.get("")
 async def list_orders() -> list[dict[str, object]]:
     try:
-        from trading_bot.app.state_store import list_brokers
-
         brokers = list_brokers(include_inactive=True)
         return [
             {

@@ -23,6 +23,26 @@ def test_market_data_services_normalize_snapshot():
     asyncio.run(_run())
 
 
+def test_mt5_market_data_does_not_fake_prices_when_unavailable(monkeypatch):
+    import trading_bot.adapters.market_data.mt5_market_data as mt5_market_data_module
+
+    async def _run():
+        monkeypatch.setattr(mt5_market_data_module, "MetaTrader5", None)
+        adapter = MT5MarketDataAdapter()
+
+        snapshot = await adapter.fetch_snapshot("EURUSD")
+        bars = await adapter.fetch_bars("EURUSD", "M1", limit=20)
+
+        assert snapshot["symbol"] == "EURUSD"
+        assert snapshot["connected"] is False
+        assert snapshot.get("last") is None
+        assert snapshot.get("bid") is None
+        assert snapshot.get("ask") is None
+        assert bars == []
+
+    asyncio.run(_run())
+
+
 def test_persistence_repositories_store_state():
     async def _run():
         state = StateRepository()

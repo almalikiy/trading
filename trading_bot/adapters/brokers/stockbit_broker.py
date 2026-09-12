@@ -25,40 +25,21 @@ class StockbitBrokerAdapter(BaseAdapter):
         return self.connected
 
     async def get_account_summary(self) -> AccountSummary:
-        return AccountSummary(
-            broker=self.name,
-            balance=Decimal("5000000.00"),
-            equity=Decimal("5000000.00"),
-            margin_used=Decimal("0.00"),
-            free_margin=Decimal("5000000.00"),
-            leverage=Decimal("1"),
-            currency="IDR",
-        )
+        if not self.connected:
+            raise RuntimeError("Stockbit broker is not connected")
+
+        raise RuntimeError("Stockbit broker account data is unavailable until a live connection is established")
 
     async def get_ticker(self, symbol: str) -> SymbolQuote:
-        price = Decimal("1000")
-        return SymbolQuote(
-            symbol=symbol,
-            bid=price,
-            ask=price + Decimal("5"),
-            last=price,
-            timestamp=datetime.utcnow(),
-            spread=Decimal("5"),
-        )
+        if not self.connected:
+            raise RuntimeError("Stockbit broker is not connected")
+
+        raise RuntimeError("Stockbit broker ticker data is unavailable until a live connection is established")
 
     async def get_ohlcv(self, symbol: str, timeframe: str, limit: int = 200) -> list[Candle]:
-        return [
-            Candle(
-                symbol=symbol,
-                timeframe=timeframe,
-                open=Decimal("990"),
-                high=Decimal("1015"),
-                low=Decimal("985"),
-                close=Decimal("1005"),
-                volume=Decimal("5000"),
-                timestamp=datetime.utcnow(),
-            )
-        ]
+        if not self.connected:
+            return []
+        return []
 
     async def get_positions(self) -> list[Position]:
         return []
@@ -77,7 +58,7 @@ class StockbitBrokerAdapter(BaseAdapter):
             status=status,
             filled_volume=request.volume,
             average_price=request.price or Decimal("0"),
-            raw_response={"source": "stockbit_skeleton", "request": request.metadata},
+            raw_response={"source": "stockbit_adapter", "request": request.metadata},
         )
 
     async def cancel_order(self, order_id: str) -> bool:
@@ -89,7 +70,7 @@ class StockbitBrokerAdapter(BaseAdapter):
     async def get_symbol_info(self, symbol: str) -> dict[str, Any]:
         return {
             "symbol": symbol,
-            "status": "skeleton",
+            "status": "offline",
             "lot_size": 1,
             "tick_size": 1,
             "currency": "IDR",

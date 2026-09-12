@@ -1,14 +1,22 @@
 #file: frontend_dash/pages/overview.py
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pandas as pd
 import plotly.graph_objects as go
 from dash import dcc, html
 
-from frontend_dash.api.client import api_get, as_mapping
+from frontend_dash.api.client import api_get_async, as_mapping
 from frontend_dash.config import DEFAULT_BARS, DEFAULT_SYMBOL, DEFAULT_TIMEFRAME
+
+
+async def _safe_api_get(path: str, params: dict[str, Any] | None = None, timeout: float = 2) -> Any:
+    try:
+        return await api_get_async(path, params=params, timeout=timeout)
+    except Exception:
+        return {}
 
 
 def _signal_dot_class(value: str) -> str:
@@ -17,6 +25,19 @@ def _signal_dot_class(value: str) -> str:
     if value == "sell":
         return "status-dot pill-signal-sell"
     return "status-dot pill-signal-wait"
+
+
+def _sync_status_dot_class(value: str) -> str:
+    normalized = str(value or "idle").lower()
+    if normalized in {"failed", "error"}:
+        return "status-dot pill-sync-failed"
+    if normalized == "running":
+        return "status-dot pill-sync-running"
+    if normalized == "queued":
+        return "status-dot pill-sync-queued"
+    if normalized == "completed":
+        return "status-dot pill-sync-completed"
+    return "status-dot pill-sync-idle"
 
 
 def _accent_class(index: int) -> str:
@@ -196,31 +217,40 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
     timeframe = timeframe or DEFAULT_TIMEFRAME
     bars = _safe_int(bars, DEFAULT_BARS)
 
-    try:
-        summary = api_get("/dashboard/summary")
-        account = api_get("/account/state")
-        positions = api_get("/trade/open_positions")
-        signal = api_get("/signal", {"symbol": symbol, "mode": "real"})
-        candles = api_get("/ohlcv", {"symbol": symbol, "timeframe": timeframe, "bars": bars})
-        default_broker = api_get("/brokers/default")
-        try:
-            mt5_status = api_get("/mt5/status")
-        except Exception:
-            mt5_status = {"connected": False}
+    async def _load_data() -> html.Div:
+        summary, account, positions, signal, candles, default_broker, mt5_status, background_sync, auto_trade_health = await asyncio.gather(
+            _safe_api_get("/dashboard/summary"),
+            _safe_api_get("/account/state"),
+            _safe_api_get("/trade/open_positions"),
+            _safe_api_get("/signal", {"symbol": symbol, "mode": "real"}),
+            _safe_api_get("/ohlcv", {"symbol": symbol, "timeframe": timeframe, "bars": bars}),
+            _safe_api_get("/brokers/default"),
+            _safe_api_get("/mt5/status"),
+            _safe_api_get("/mt5/background_sync_status"),
+            _safe_api_get("/account/auto_trade_health"),
+        )
 
         signal_data = as_mapping(signal)
         account_data = as_mapping(account)
         summary_data = as_mapping(summary)
         default_broker_data = as_mapping(default_broker)
         mt5_status_data = as_mapping(mt5_status)
+        background_sync_data = as_mapping(background_sync)
+        auto_trade_health_map = as_mapping(auto_trade_health)
 
         position_rows = positions if isinstance(positions, list) else []
         candles_rows = candles if isinstance(candles, list) else []
 
         last_signal = str(signal_data.get("signal", "wait")).lower()
         indicators = signal_data.get("indicators") if isinstance(signal_data.get("indicators"), dict) else {}
-        signal_last_price = float((indicators.get("last") or 0.0) or 0.0)
-        ohlcv_last_price = float(candles_rows[-1].get("close", signal_last_price)) if candles_rows else signal_last_price
+        def _as_float(value: Any, default: float = 0.0) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
+        signal_last_price = _as_float(indicators.get("last"), 0.0)
+        ohlcv_last_price = _as_float((candles_rows[-1] or {}).get("close"), signal_last_price) if candles_rows else signal_last_price
         last_price = ohlcv_last_price if candles_rows and ohlcv_last_price else signal_last_price if signal_last_price else 0.0
 
         account_balance = float(account_data.get("balance", 0.0) or 0.0)
@@ -241,6 +271,8 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
 
         broker_summary = summary_data.get("brokers", []) if isinstance(summary_data.get("brokers", []), list) else []
         mt5_connected = bool(mt5_status_data.get("connected", False))
+        background_sync_state = str(background_sync_data.get("sync_status", "idle") or "idle").lower()
+        sync_status_label = background_sync_state.upper() if background_sync_state else "IDLE"
 
         metric_cards = [
             html.Div(
@@ -257,8 +289,6 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
         signal_reason, key_areas, areas_map = _compute_signal_insight(candles_rows, signal_status, last_price)
         market_fig = _build_figure(candles_rows, areas_map)
 
-        auto_trade_health = api_get("/account/auto_trade_health")
-        auto_trade_health_map = as_mapping(auto_trade_health)
         auto_trade_checks = auto_trade_health_map.get("checks", []) if isinstance(auto_trade_health_map.get("checks", []), list) else []
         auto_trade_enabled = bool(
             auto_trade_health_map.get("auto_trade_enabled")
@@ -284,18 +314,25 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
                 html.Div("Operational Overview", className="section-label"),
                 html.Div(
                     [
-                        html.Div([html.Span("Signal", className=_signal_dot_class(last_signal)), html.Span(f"{signal_status}")], className="status-pill"),
+                        html.Div([html.Span("Signal ", className=_signal_dot_class(last_signal)), html.Span(f"{signal_status}")], className="status-pill"),
                         html.Div(
                             [
-                                html.Span("Broker", className="status-dot pill-broker"),
+                                html.Span("Broker ", className="status-dot pill-broker"),
                                 html.Span(f"{len(broker_summary)} active"),
                             ],
                             className="status-pill",
                         ),
                         html.Div(
                             [
-                                html.Span("MT5", className="status-dot pill-mt5-on" if mt5_connected else "status-dot pill-mt5-off"),
+                                html.Span("MT5 ", className="status-dot pill-mt5-on" if mt5_connected else "status-dot pill-mt5-off"),
                                 html.Span("Connected" if mt5_connected else "Offline"),
+                            ],
+                            className="status-pill",
+                        ),
+                        html.Div(
+                            [
+                                html.Span("Sync ", className=_sync_status_dot_class(background_sync_state)),
+                                html.Span(sync_status_label),
                             ],
                             className="status-pill",
                         ),
@@ -307,6 +344,7 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
                         html.Div(f"Source: {indicators.get('source', 'market-data')}", className="kv-line"),
                         html.Div(f"Bid / Ask: {_format_number(indicators.get('bid', 0.0))} / {_format_number(indicators.get('ask', 0.0))}", className="kv-line"),
                         html.Div(f"Default Broker: {default_broker_data.get('name', '-') if default_broker_data else '-'}"),
+                        html.Div(f"MT5 Sync Status: {sync_status_label}", className="kv-line"),
                     ],
                     className="kv-stack",
                 ),
@@ -343,16 +381,20 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
         return html.Div(
             [
                 html.Div(metric_cards, className="metrics-grid"),
+                chart_panel,
                 html.Div(
                     [
-                        chart_panel,
-                        html.Div([signal_panel, operational_panel], className="overview-side"),
+                        signal_panel,
+                        operational_panel
                     ],
-                    className="overview-main",
+                    className="overview-bottom-grid",
                 ),
             ],
             className="page-layout",
         )
+
+    try:
+        return asyncio.run(_load_data())
     except Exception as exc:
         return html.Div([
             html.H3("Backend unavailable"),

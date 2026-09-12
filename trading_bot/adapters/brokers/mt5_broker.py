@@ -14,6 +14,15 @@ except Exception:  # pragma: no cover - runtime environment dependency
     mt5 = None
 
 
+def _require_mt5_keep_alive_permission(terminal_path: str | None = None) -> None:
+    try:
+        from trading_bot.app import terminal_adapters as terminal_adapters
+    except Exception:
+        return
+    if not terminal_adapters._is_keep_terminal_alive_enabled():
+        raise RuntimeError("MT5 startup denied: Keep MT5 alive is disabled.")
+
+
 class MT5BrokerAdapter(BaseAdapter):
     name = "mt5"
 
@@ -56,6 +65,7 @@ class MT5BrokerAdapter(BaseAdapter):
             self.last_error = "MetaTrader5 package is not installed or not available in this environment."
             return
 
+        _require_mt5_keep_alive_permission(self.terminal_path)
         initialized = mt5.initialize(path=self.terminal_path or "")
         if not initialized:
             self.connected = False

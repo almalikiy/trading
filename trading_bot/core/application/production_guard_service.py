@@ -134,8 +134,8 @@ class ProductionGuardService:
                     )
             else:
                 self.alert_service.add(
-                    "placeholder_account_summary",
-                    "Broker account summary is placeholder data; live margin checks skipped until broker is connected to a real account.",
+                    "empty_account_summary",
+                    "Broker account summary is empty; live margin checks are skipped until the broker is connected to a real account.",
                     level="warning",
                 )
 
@@ -193,13 +193,13 @@ class ProductionGuardService:
             self.alert_service.add("symbol_info_unavailable", str(exc), level="critical")
             info = None
 
-        if info is not None and info.get("status") not in {None, "available", "ok", "ready", "skeleton"}:
+        if info is not None and info.get("status") not in {None, "available", "ok", "ready", "offline", "unavailable"}:
             errors.append(f"symbol_not_available: {symbol_name}")
             self.alert_service.add("symbol_not_available", f"Symbol {symbol_name} is not available or marked inactive", level="critical")
-        elif info is not None and info.get("status") == "skeleton":
+        elif info is not None and info.get("status") in {"offline", "unavailable"}:
             self.alert_service.add(
-                "symbol_placeholder_mode",
-                f"Symbol {symbol_name} metadata is in placeholder mode; live validation will be strict only when broker is connected to a real account.",
+                "symbol_unavailable",
+                f"Symbol {symbol_name} metadata is currently offline; live validation will continue only when the broker is connected and ready.",
                 level="warning",
             )
 

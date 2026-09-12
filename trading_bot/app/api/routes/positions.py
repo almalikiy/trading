@@ -4,10 +4,16 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Body
 
 from trading_bot.adapters.brokers.broker_factory import BrokerFactory
-from trading_bot.app.state_store import get_open_trades_count, get_trade_history
+from trading_bot.app import db
+from trading_bot.app.persistence.trade_store import get_open_trades_count, get_trade_history
+from trading_bot.app.terminal_adapters import sync_trade_state_for_history_flow_in_background
+
+
+def sync_trade_state_for_history_flow(*args, **kwargs):
+    return sync_trade_state_for_history_flow_in_background(*args, **kwargs)
 from trading_bot.core.domain.models import Position
 
 router = APIRouter(prefix="/positions", tags=["positions"])
@@ -107,20 +113,25 @@ async def list_positions() -> list[dict[str, object]]:
 
 @legacy_router.get("/open_positions")
 async def list_open_positions_compat() -> list[dict[str, Any]]:
-    return await _fetch_positions()
+    sync_trade_state_for_history_flow_in_background(timeout_sec=0.75)
+    rows = db.list_open_trades()
+    return [_normalize_position(item, str(item.get("broker_name") or item.get("broker") or "mt5")) for item in rows]
 
 
 @legacy_router.get("/open_count")
 async def open_positions_count_compat() -> dict[str, int]:
+    sync_trade_state_for_history_flow_in_background(timeout_sec=0.75)
     try:
         count = int(get_open_trades_count())
     except Exception:
         count = 0
-    return {"count": max(0, count)}
+    safe_count = max(0, count)
+    return {"count": safe_count, "open_count": safe_count}
 
 
 @legacy_router.get("/history")
 async def trade_history_compat() -> list[dict[str, Any]]:
+    sync_trade_state_for_history_flow_in_background(timeout_sec=0.75)
     try:
         rows = get_trade_history()
     except Exception:
@@ -129,3 +140,31 @@ async def trade_history_compat() -> list[dict[str, Any]]:
     if not isinstance(rows, list):
         return []
     return [_normalize_trade_history_item(item) for item in rows]
+
+
+@legacy_router.get("/{trade_identifier}/details")
+async def trade_details_compat(trade_identifier: str) -> dict[str, Any]:
+    row = db.get_trade_details(str(trade_identifier))
+    if not row:
+        return {"status": "error", "message": "Trade not found"}
+    return {"status": "ok", "trade": row, "details": row}
+
+
+@legacy_router.post("/update_tpsl")
+async def update_tpsl_compat(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    ticket = payload.get("ticket")
+    if ticket is None:
+        return {"status": "error", "message": "ticket is required"}
+
+    existing = db.get_trade_details(str(ticket))
+    if not existing:
+        return {"status": "error", "message": "Trade not found"}
+
+    updated = dict(existing)
+    for key in ("symbol", "type", "entry_price", "tp", "sl"):
+        if key in payload and payload.get(key) is not None:
+            updated[key] = payload.get(key)
+
+    db.upsert_trade_history_record(updated)
+    row = db.get_trade_details(str(ticket)) or updated
+    return {"status": "ok", "message": "TP/SL updated", "trade": row}

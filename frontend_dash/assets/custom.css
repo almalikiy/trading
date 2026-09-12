@@ -479,6 +479,26 @@ body {
     background: #fbbf24;
 }
 
+.pill-sync-idle {
+    background: #9ca3af;
+}
+
+.pill-sync-queued {
+    background: #60a5fa;
+}
+
+.pill-sync-running {
+    background: #fbbf24;
+}
+
+.pill-sync-failed {
+    background: #ef4444;
+}
+
+.pill-sync-completed {
+    background: #22c55e;
+}
+
 .metric-value {
     font-size: 1.55rem;
     font-weight: 700;
@@ -597,23 +617,36 @@ body {
 }
 
 .status-row {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(110px, 1fr));
     gap: 10px;
     margin-top: 10px;
+    align-items: stretch;
 }
 
 .status-pill {
-    display: inline-flex;
+    display: flex;
     align-items: center;
+    justify-content: flex-start;
     gap: 8px;
-    padding: 8px 12px;
+    min-width: 0;
+    width: 100%;
+    padding: 8px 10px;
     border-radius: 999px;
     background: var(--status-pill-bg);
     border: 1px solid var(--line);
     color: var(--text);
     font-size: 0.74rem;
     font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.status-pill>span {
+    display: inline-block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .status-dot {
@@ -621,6 +654,7 @@ body {
     height: 9px;
     border-radius: 50%;
     display: inline-block;
+    flex-shrink: 0;
 }
 
 .app-shell.theme-dark .panel-chart .js-plotly-plot text {
@@ -647,6 +681,21 @@ body {
     color: var(--error-text);
 }
 
+/* 1. Tetap buat 2 kolom berdampingan secara default */
+.overview-bottom-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    width: 100%;
+}
+
+/* 2. Hanya ubah jadi 1 kolom jika benar-benar di layar HP (di bawah 600px) */
+@media (max-width: 600px) {
+    .overview-bottom-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 @media (max-width: 920px) {
     .sidebar-drawer {
         width: 88px;
@@ -663,7 +712,5 @@ body {
         margin-left: 108px;
     }
 
-    .overview-main {
-        grid-template-columns: 1fr;
-    }
+    /* .overview-bottom-grid dihapus dari sini agar tidak ikut berubah jadi 1 kolom */
 }

@@ -42,3 +42,11 @@ def test_dash_callbacks_registered() -> None:
     assert any("drawer-collapsed.data" in key and "sidebar-drawer.className" in key for key in callback_keys)
     assert "strategy-parameter-inputs.children" in callback_keys
     assert "strategy-control-status.children" in callback_keys
+
+
+def test_overview_page_renders_without_backend_errors() -> None:
+    from frontend_dash.pages.overview import render_overview_page
+
+    page = render_overview_page("XAUUSD", "M1", 60)
+    assert page is not None
+    assert getattr(page, "children", None) is not None

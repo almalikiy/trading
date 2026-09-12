@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, WebSocket
 
 from trading_bot.adapters.market_data.binance_market_data import BinanceMarketDataAdapter
 from trading_bot.adapters.market_data.mt5_market_data import MT5MarketDataAdapter
+from trading_bot.app.signal_ws import signal_stream
 
 router = APIRouter(tags=["market-data"])
 
@@ -55,3 +56,13 @@ async def get_ohlcv(symbol: str = "XAUUSD", timeframe: str = "M1", bars: int = 1
         }
         for item in candles
     ]
+
+
+@router.websocket("/ws/signal")
+async def websocket_signal_stream(websocket: WebSocket) -> None:
+    await signal_stream(websocket)
+
+
+@router.websocket("/signal/ws")
+async def websocket_signal_stream_legacy(websocket: WebSocket) -> None:
+    await signal_stream(websocket)

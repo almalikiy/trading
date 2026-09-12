@@ -20,6 +20,10 @@ def render_settings_page():
         account_data = as_mapping(account)
         rows = brokers if isinstance(brokers, list) else []
 
+        keep_alive_status = as_mapping(api_get("/account/keep_mt5_alive_status"))
+        keep_alive_enabled = bool(keep_alive_status.get("enabled", bool(account_data.get("keep_terminal_alive", False))))
+        keep_alive_mode = "ON" if keep_alive_enabled else "OFF"
+
         settings_cards = [
             html.Div([
                 html.Div("Account", className="section-label"),
@@ -39,6 +43,10 @@ def render_settings_page():
                 html.Div("Trade Execution: Operational Controls", className="kv-line"),
                 html.Div("Risk Guard: Active", className="kv-line"),
                 html.Div("Alerts: Enabled"),
+            ], className="compact-panel"),
+            html.Div([
+                html.Div("Keep MT5 Alive", className="section-label"),
+                html.Div(f"Status: {keep_alive_mode} • {keep_alive_status.get('status', 'disabled').title()}", className="kv-line"),
             ], className="compact-panel"),
         ]
 

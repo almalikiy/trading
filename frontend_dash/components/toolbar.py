@@ -37,7 +37,11 @@ def build_toolbar() -> html.Div:
                 className="toolbar-field",
             ),
             html.Button("Toggle Auto Trade", id="auto-trade-toggle", n_clicks=0, className="action-button neutral"),
+            html.Button("Enable Keep MT5 Alive", id="keep-mt5-alive-toolbar-button", n_clicks=0, className="action-button neutral"),
+            html.Button("Confirm MT5 Operational Check", id="confirm-mt5-operation-button", n_clicks=0, className="action-button neutral"),
             html.Div(id="auto-trade-toolbar-status", children="Auto Trade: Unknown", className="toolbar-status"),
+            html.Div(id="keep-mt5-alive-toolbar-status", children="MT5 Keep Alive: OFF", className="toolbar-status"),
+            html.Div(id="confirm-mt5-operation-status", children="MT5 Operational Check: Pending", className="toolbar-status"),
         ],
         className="panel main-toolbar",
     )

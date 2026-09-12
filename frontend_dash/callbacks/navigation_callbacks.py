@@ -4,6 +4,7 @@ from typing import Any
 
 from dash import Dash, Input, Output, State
 
+from frontend_dash.api.client import api_get, api_post, as_mapping
 from frontend_dash.pages import render_overview_page, render_settings_page, render_strategy_page, render_transactions_page
 
 
@@ -63,3 +64,45 @@ def register_navigation_callbacks(app: Dash) -> None:
         if page == "settings":
             return render_settings_page()
         return render_overview_page(symbol, timeframe, bars)
+
+    @app.callback(
+        Output("keep-mt5-alive-toolbar-button", "children"),
+        Output("keep-mt5-alive-toolbar-status", "children"),
+        Input("keep-mt5-alive-toolbar-button", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def toggle_keep_mt5_alive(_n_clicks: int | None):
+        try:
+            current = as_mapping(api_get("/account/keep_mt5_alive_status"))
+            enabled = bool(current.get("enabled", False))
+            next_enabled = not enabled
+            response = api_post("/account/set_keep_terminal_alive", {"enabled": next_enabled})
+            actual = bool(as_mapping(response).get("keep_terminal_alive", next_enabled))
+            status = as_mapping(api_get("/account/keep_mt5_alive_status"))
+            label = "Disable Keep MT5 Alive" if actual else "Enable Keep MT5 Alive"
+            detail = f"MT5 Keep Alive: {'ON' if actual else 'OFF'} • {str(status.get('status', 'disabled')).title()}"
+            return label, detail
+        except Exception as exc:
+            return "Enable Keep MT5 Alive", f"MT5 Keep Alive: failed • {exc}"
+
+    @app.callback(
+        Output("confirm-mt5-operation-button", "children"),
+        Output("confirm-mt5-operation-status", "children"),
+        Input("confirm-mt5-operation-button", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def confirm_mt5_operation(_n_clicks: int | None):
+        try:
+            response = api_post(
+                "/account/confirm_mt5_operation",
+                {"call_name": "manual_operational_check", "confirm": True, "approved": True},
+            )
+            payload = as_mapping(response)
+            confirmed = bool(payload.get("confirmed", False))
+            label = "MT5 Check Approved" if confirmed else "Confirm MT5 Operational Check"
+            detail = "MT5 Operational Check: Approved" if confirmed else "MT5 Operational Check: Pending"
+            if payload.get("message"):
+                detail = f"MT5 Operational Check: {payload.get('message')}"
+            return label, detail
+        except Exception as exc:
+            return "Confirm MT5 Operational Check", f"MT5 Operational Check: failed • {exc}"
