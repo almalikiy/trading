@@ -7,7 +7,7 @@ Aplikasi web untuk memberikan sinyal trading open/buy pada XAUUSD atau simbol la
 - Backend: Python (FastAPI)
 - MT5 integration: MetaTrader5 Python package
 - Frontend: Dash / Plotly dashboard
-- Data layer: SQLite + custom repositories / state stores
+- Data layer: PostgreSQL-first + SQLite compatibility shim during migration
 - Real-time flow: background workers + polling + websocket-style state refresh
 
 ## Custom Classes Yang Dibuat di Project Ini
@@ -74,6 +74,36 @@ Project ini tidak hanya memakai framework bawaan, tapi juga memiliki beberapa cu
 
 Class-class di atas adalah custom project classes yang membentuk struktur modular trading bot ini. Mereka dipisahkan per concern agar lebih mudah dikelola, diuji, dan dikembangkan.
 
+## Arsitektur Stream Aman (Direkomendasikan)
+Project ini menggunakan arsitektur hybrid yang aman:
+
+- WebSocket dipakai hanya untuk live signal stream ringan dan dashboard UI yang membutuhkan update real-time.
+- REST/polling tetap dipakai untuk operasi MT5 yang sensitif seperti status terminal, account info, posisi, history, dan eksekusi order.
+- Saat `keep_terminal_alive = OFF`, stream akan masuk ke mode degraded dan tidak memaksa backend untuk menyalakan terminal MT5.
+- Semua operasi MT5 yang berat atau non-strategy tetap di-guard dengan konfirmasi user dan policy backend.
+
+```mermaid
+flowchart LR
+    A[Frontend Dashboard] --> B[WebSocket /ws/signal]
+    B --> C[SignalStreamService]
+    C --> D[Cached Signal Snapshot]
+    C --> E{Keep MT5 alive?}
+    E -- Yes --> F[Backend MT5 Data Access]
+    E -- No --> G[Safe degraded stream + cached state]
+
+    A --> H[REST API /account /orders /positions /dashboard]
+    H --> I[FastAPI Service Layer]
+    I --> J[MT5 Guard + Broker Policy]
+    J --> K[MT5 Native Calls]
+    K --> L[Safe shutdown + lock protection]
+```
+
+### Prinsip desain
+- Real-time UI = light websocket stream
+- MT5 operational task = protected REST/polling
+- No silent startup = terminal tidak boleh dibuka tanpa kebijakan backend
+- Modular + scalable = setiap concern dipisah berdasarkan responsibility
+
 ## Fitur
 - Sinyal trading real-time (refresh tiap detik)
 - Integrasi MT5 untuk data harga dan eksekusi
@@ -86,8 +116,8 @@ Class-class di atas adalah custom project classes yang membentuk struktur modula
 1. Pastikan Python 3.10+ dan Node.js terinstal
 2. Install dependensi backend: `pip install -r requirements.txt`
 3. Install dependensi frontend: `cd frontend && npm install`
-4. Jalankan backend: `uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload`
-5. Jalankan frontend: `cd frontend && npm run dev`
+4. Jalankan backend tanpa reload untuk mencegah duplikasi worker dan port conflict: `uvicorn trading_bot.app.main:app --host 0.0.0.0 --port 8001 --workers 1`
+5. Jalankan frontend dengan debug non-reloader di local: `DASH_USE_RELOADER=false python frontend_dash/app.py`
 6. Testing backend CORS respons:
    `curl -i -X OPTIONS http://127.0.0.1:8001/account/state -H "Origin: https://trading.almalikiy.net" -H "Access-Control-Request-Method: GET"`
 7. Memeriksa apakah port sudah dipakai : `netstat -ano | findstr :8001`

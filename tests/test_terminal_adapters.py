@@ -4,8 +4,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import app.auto_trader as auto_trader
-import app.terminal_adapters as terminal_adapters
+import trading_bot.app.auto_trader as auto_trader
+import trading_bot.app.terminal_adapters as terminal_adapters
 
 
 def test_mt5_access_has_global_lock():

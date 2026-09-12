@@ -4,8 +4,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import app.db as db
-import app.ml_risk as ml_risk
+import trading_bot.app.db as db
+import trading_bot.app.ml_risk as ml_risk
 
 
 def test_init_db_adds_default_symbol_column(tmp_path):

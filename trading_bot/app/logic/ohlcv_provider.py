@@ -69,11 +69,10 @@ def fetch_ohlcv(symbol: str, timeframe: str = "M1", bars: int = 100, terminal_pa
 
     initialized = False
     try:
-        _require_mt5_keep_alive_permission(terminal_path)
-        if terminal_path:
-            initialized = bool(mt5.initialize(path=terminal_path))
-        else:
-            initialized = bool(mt5.initialize())
+        from trading_bot.app import terminal_adapters as terminal_adapters
+
+        allowed_path = terminal_adapters._require_default_mt5_terminal_permission(terminal_path)
+        initialized = bool(mt5.initialize(path=allowed_path))
         if not initialized:
             raise RuntimeError("MT5 not connected")
 

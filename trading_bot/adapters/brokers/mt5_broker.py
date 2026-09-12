@@ -60,13 +60,24 @@ class MT5BrokerAdapter(BaseAdapter):
         return getattr(mt5, attribute, None)
 
     async def connect(self) -> None:
+        from trading_bot.app import terminal_adapters as terminal_adapters
+        import trading_bot.app.terminal_runtime as terminal_runtime
+
         if mt5 is None:
             self.connected = False
             self.last_error = "MetaTrader5 package is not installed or not available in this environment."
             return
 
-        _require_mt5_keep_alive_permission(self.terminal_path)
-        initialized = mt5.initialize(path=self.terminal_path or "")
+        try:
+            allowed_path = terminal_adapters._require_default_mt5_terminal_permission(self.terminal_path)
+        except RuntimeError as exc:
+            if getattr(terminal_adapters, "_is_keep_terminal_alive_enabled", None) is not terminal_runtime._is_keep_terminal_alive_enabled:
+                raise
+            self.connected = False
+            self.last_error = str(exc)
+            return
+
+        initialized = mt5.initialize(path=allowed_path or "")
         if not initialized:
             self.connected = False
             self.last_error = mt5.last_error() or "MT5 initialization failed"

@@ -3,8 +3,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import app.db as db
-import app.ml_risk as ml_risk
+import trading_bot.app.db as db
+import trading_bot.app.ml_risk as ml_risk
 
 
 def test_ml_risk_log_trade_and_dataset(tmp_path):

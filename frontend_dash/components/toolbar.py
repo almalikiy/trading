@@ -42,6 +42,19 @@ def build_toolbar() -> html.Div:
             html.Div(id="auto-trade-toolbar-status", children="Auto Trade: Unknown", className="toolbar-status"),
             html.Div(id="keep-mt5-alive-toolbar-status", children="MT5 Keep Alive: OFF", className="toolbar-status"),
             html.Div(id="confirm-mt5-operation-status", children="MT5 Operational Check: Pending", className="toolbar-status"),
+            html.Div(
+                [
+                    html.Span(className="status-dot pill-sync-queued", id="toolbar-stream-status-dot"),
+                    html.Span("DEGRADED MODE", id="toolbar-stream-status"),
+                    html.Span(
+                        "MT5 Keep Alive is off. Stream is using cached/non-terminal data only.",
+                        id="toolbar-stream-detail",
+                        className="toolbar-stream-detail",
+                    ),
+                ],
+                className="toolbar-stream-status",
+                title="MT5 Keep Alive is off. Stream is using cached/non-terminal data only.",
+            ),
         ],
         className="panel main-toolbar",
     )

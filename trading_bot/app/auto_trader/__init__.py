@@ -7,7 +7,7 @@ from typing import Any
 import trading_bot.app.ml_risk as ml_risk
 from trading_bot.app.auto_trader.cycle import run_auto_trade_cycle
 from trading_bot.app.auto_trader.diagnostics import diag_close_attempt, diag_event, diag_open_attempt, get_runtime_status
-from trading_bot.app.auto_trader.guards import (
+from trading_bot.risk.guards import (
     build_adaptive_target_snapshot as _build_adaptive_target_snapshot_impl,
     normalize_side as _normalize_side_impl,
     passes_direction_bias_guard as _passes_direction_bias_guard_impl,

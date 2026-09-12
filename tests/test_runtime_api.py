@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-import app.logic as logic
+import trading_bot.app.logic as logic
 from trading_bot.app.main import app
 
 
@@ -159,7 +159,7 @@ def test_background_refresh_handles_no_data_without_raising(monkeypatch):
 
 
 def test_legacy_auto_trade_state_tracks_persisted_db_value():
-    from app.db import get_account_state, save_account_state
+    from trading_bot.app.db import get_account_state, save_account_state
 
     client = TestClient(app)
     state = get_account_state()
@@ -366,6 +366,24 @@ def test_keep_mt5_alive_off_does_not_auto_start_terminal():
     assert calls == []
 
 
+def test_default_broker_remains_the_only_backend_autostart_target(monkeypatch):
+    import trading_bot.app.terminal_adapters as terminal_adapters
+
+    default_broker = {"id": 7, "name": "Default Broker", "platform": "mt5", "terminal_path": "D:/MT5/default_terminal.exe", "is_default": True}
+    feed_broker = {"id": 2, "name": "Feed Broker", "platform": "mt5", "terminal_path": "C:/MT5/feed_terminal.exe", "is_default": False}
+
+    monkeypatch.setattr(terminal_adapters.db, "get_default_broker", lambda: default_broker)
+    monkeypatch.setattr(terminal_adapters, "_is_keep_terminal_alive_enabled", lambda: True)
+    monkeypatch.setattr(terminal_adapters, "_list_process_paths", lambda: set())
+    monkeypatch.setattr(terminal_adapters.subprocess, "Popen", lambda *args, **kwargs: object())
+
+    assert terminal_adapters.ensure_terminal_running(feed_broker["terminal_path"], broker=feed_broker) is False
+    assert terminal_adapters.ensure_terminal_running(default_broker["terminal_path"], broker=default_broker) is True
+
+    monkeypatch.setattr(terminal_adapters.db, "resolve_feed_broker", lambda state=None, require_terminal_path=False: feed_broker)
+    assert terminal_adapters._get_active_mt5_terminal_target() == (default_broker["terminal_path"], default_broker["name"])
+
+
 def test_ensure_terminal_running_refuses_when_keep_alive_disabled(monkeypatch):
     import trading_bot.app.terminal_adapters as terminal_adapters
 
@@ -455,6 +473,22 @@ def test_direct_mt5_initialization_is_blocked_when_keep_alive_disabled(monkeypat
     finally:
         monkeypatch.setattr(execution, "mt5", None, raising=False)
         monkeypatch.setattr(ohlcv_provider, "mt5", None, raising=False)
+
+
+def test_websocket_stream_exposes_signal_and_ohlcv_payload():
+    client = TestClient(app)
+    with client.websocket_connect("/ws/signal?symbol=XAUUSD&mode=real&timeframe=M1&bars=10") as websocket:
+        payload = websocket.receive_json()
+        assert payload["symbol"] == "XAUUSD"
+        assert "signal" in payload
+        assert "ohlcv" in payload
+        assert isinstance(payload["ohlcv"], list)
+
+    with client.websocket_connect("/ws/ohlcv?symbol=XAUUSD&timeframe=M1&bars=10") as websocket:
+        payload = websocket.receive_json()
+        assert payload["symbol"] == "XAUUSD"
+        assert payload["timeframe"] == "M1"
+        assert isinstance(payload["ohlcv"], list)
 
 
 def test_keep_mt5_alive_off_blocks_every_auto_start_helper_path():

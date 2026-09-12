@@ -1,4 +1,5 @@
 #file : frontend_dash/app.py
+import os
 import sys
 from pathlib import Path
 
@@ -17,17 +18,33 @@ from frontend_dash.config import REFRESH_MS # Import refresh interval configurat
 from frontend_dash.server import app # Import Dash app instance
 
 
+def _dash_runtime_settings() -> tuple[str, int, bool]:
+    """Use explicit environment overrides for local development to avoid duplicate reloaders."""
+    host = os.getenv("DASH_HOST", "0.0.0.0")
+    port = int(os.getenv("DASH_PORT", "8050"))
+    debug = os.getenv("DASH_DEBUG", "false").strip().lower() in {"1", "true", "yes", "on"}
+    use_reloader = debug and os.getenv("DASH_USE_RELOADER", "false").strip().lower() in {"1", "true", "yes", "on"}
+    return host, port, use_reloader
+
+
 def build_layout() -> html.Div:  # Build the main layout of the Dash app
     return html.Div(
         [
             dcc.Interval(id="refresh-interval", interval=REFRESH_MS, n_intervals=0),
             dcc.Store(id="drawer-collapsed", data=False),
             dcc.Store(id="theme-mode", data="dark", storage_type="local"),
+            dcc.Store(id="stream-status", data={"mode": "degraded", "notice": "MT5 Keep Alive is off. Stream is using cached/non-terminal data only."}),
             build_sidebar(),
             html.Div(
                 [
                     build_toolbar(),
-                    html.Div(id="dashboard-page", className="page-layout"),
+                    html.Div(id="dashboard-page", className="page-layout", children=[
+                        html.Div(
+                            id="status-summary-panel",
+                            className="panel",
+                            children="System Status",
+                        )
+                    ]),
                 ],
                 id="app-content", #
                 className="app-content",
@@ -44,4 +61,6 @@ register_navigation_callbacks(app) # Register navigation-related callbacks with 
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8050, debug=True, use_reloader=True)
+    host, port, use_reloader = _dash_runtime_settings()
+    debug = os.getenv("DASH_DEBUG", "false").strip().lower() in {"1", "true", "yes", "on"}
+    app.run(host=host, port=port, debug=debug, use_reloader=use_reloader)

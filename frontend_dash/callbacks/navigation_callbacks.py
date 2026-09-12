@@ -49,13 +49,12 @@ def register_navigation_callbacks(app: Dash) -> None:
 
     @app.callback(
         Output("dashboard-page", "children"),
-        Input("refresh-interval", "n_intervals"),
         Input("page-selector", "value"),
         Input("symbol-input", "value"),
         Input("timeframe-input", "value"),
         Input("bars-input", "value"),
     )
-    def render_dashboard(_n: int, page: str | None, symbol: str | None, timeframe: str | None, bars: Any):
+    def render_dashboard(page: str | None, symbol: str | None, timeframe: str | None, bars: Any):
         page = page or "overview"
         if page == "strategy":
             return render_strategy_page()
@@ -64,6 +63,33 @@ def register_navigation_callbacks(app: Dash) -> None:
         if page == "settings":
             return render_settings_page()
         return render_overview_page(symbol, timeframe, bars)
+
+    @app.callback(
+        Output("stream-status-badge", "children"),
+        Output("stream-status-badge-dot", "className"),
+        Output("stream-status-badge", "title"),
+        Output("stream-status-detail", "children"),
+        Output("toolbar-stream-status", "children"),
+        Output("toolbar-stream-status-dot", "className"),
+        Output("toolbar-stream-status", "title"),
+        Output("toolbar-stream-detail", "children"),
+        Input("refresh-interval", "n_intervals"),
+        State("symbol-input", "value"),
+    )
+    def sync_stream_status(_n_intervals: int | None, symbol: str | None):
+        try:
+            keep_alive = as_mapping(api_get("/account/keep_mt5_alive_status"))
+            enabled = bool(keep_alive.get("enabled", False))
+            signal = as_mapping(api_get("/signal", {"symbol": symbol or "XAUUSD", "mode": "real"}))
+            stream_ok = not enabled or bool(signal.get("status") not in {"degraded", "error"})
+            badge_label = "LIVE" if stream_ok else "DEGRADED"
+            badge_class = "status-dot pill-sync-running" if stream_ok else "status-dot pill-sync-queued"
+            notice = str(signal.get("notice") or ("MT5 Keep Alive is on." if enabled else "MT5 Keep Alive is off. Stream is using cached/non-terminal data only."))
+            detail = notice
+            return badge_label, badge_class, detail, detail, "LIVE MODE" if stream_ok else "DEGRADED MODE", badge_class, detail, detail
+        except Exception:
+            fallback = "MT5 Keep Alive is off. Stream is using cached/non-terminal data only."
+            return "DEGRADED", "status-dot pill-sync-queued", fallback, fallback, "DEGRADED MODE", "status-dot pill-sync-queued", fallback, fallback
 
     @app.callback(
         Output("keep-mt5-alive-toolbar-button", "children"),

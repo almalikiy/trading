@@ -1,3 +1,4 @@
+#file: trading_bot/infrastructure/config/settings.py
 from __future__ import annotations
 
 from functools import lru_cache
@@ -14,7 +15,22 @@ def _empty_to_none(value: str | None) -> str | None:
 class Settings(BaseSettings):
     app_name: str = "trading-bot"
     environment: Literal["local", "staging", "production"] = "local"
-    debug: bool = False
+    debug: bool = True
+
+    database_backend: Literal["postgresql", "sqlite"] = "postgresql"
+    legacy_sqlite_compat_mode: bool = False
+
+    postgres_enabled: bool = True
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_user: str = "postgres"
+    postgres_password: SecretStr = SecretStr("postgres")
+    postgres_db: str = "trading"
+    postgres_schema: str = "public"
+    postgres_sslmode: str = "prefer"
+    postgres_dsn: str | None = None
+    database_reset_on_start: bool = False
+    preserve_broker_data_only: bool = True
 
     mt5_enabled: bool = False
     mt5_terminal_path: str | None = None
@@ -29,7 +45,6 @@ class Settings(BaseSettings):
     stockbit_api_secret: SecretStr | None = None
 
     redis_url: str = "redis://localhost:6379/0"
-    postgres_dsn: str = "postgresql+psycopg://postgres:postgres@localhost:5432/trading"
 
     max_open_positions: int = 5
     max_daily_loss_pct: float = 2.0
@@ -57,6 +72,16 @@ class Settings(BaseSettings):
         if value is None or value == "":
             return None
         return SecretStr(value)
+
+    @property
+    def postgres_url(self) -> str:
+        password = self.postgres_password.get_secret_value() if self.postgres_password else ""
+        if self.postgres_dsn:
+            return self.postgres_dsn
+        return (
+            f"postgresql+psycopg://{self.postgres_user}:{password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+            f"?sslmode={self.postgres_sslmode}"
+        )
 
     model_config = SettingsConfigDict(
         env_file=".env",

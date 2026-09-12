@@ -37,6 +37,27 @@ def build_sidebar() -> html.Div:
                 value="overview",
                 className="sidebar-nav",
             ),
+            html.Div(
+                [
+                    html.Div("Stream Status", className="sidebar-section-title"),
+                    html.Div(
+                        [
+                            html.Span(className="status-dot pill-sync-queued", id="stream-status-badge-dot"),
+                            html.Span("DEGRADED", id="stream-status-badge"),
+                        ],
+                        className="global-stream-badge",
+                        id="global-stream-badge",
+                        title="MT5 Keep Alive is off. Stream is using cached/non-terminal data only.",
+                    ),
+                    html.Div(
+                        "MT5 Keep Alive is off. Stream is using cached/non-terminal data only.",
+                        id="stream-status-detail",
+                        className="global-stream-detail",
+                        title="MT5 Keep Alive is off. Stream is using cached/non-terminal data only.",
+                    ),
+                ],
+                className="sidebar-stream-panel",
+            ),
             html.Div(className="sidebar-spacer"),
         ],
         id="sidebar-drawer",

@@ -24,6 +24,11 @@ def render_settings_page():
         keep_alive_enabled = bool(keep_alive_status.get("enabled", bool(account_data.get("keep_terminal_alive", False))))
         keep_alive_mode = "ON" if keep_alive_enabled else "OFF"
 
+        database_status = as_mapping(api_get("/health/database"))
+        backend_name = str(database_status.get("backend", "postgresql")).title()
+        status_value = str(database_status.get("status", "unknown")).title()
+        preserve_label = "broker list only" if bool(database_status.get("legacy_sqlite_compat_mode", False)) else "full reset policy"
+
         settings_cards = [
             html.Div([
                 html.Div("Account", className="section-label"),
@@ -39,10 +44,10 @@ def render_settings_page():
                 html.Div(f"MT5 Mode: {'Enabled' if account_data.get('enable_real_trade') else 'Disabled'}"),
             ], className="compact-panel"),
             html.Div([
-                html.Div("Execution", className="section-label"),
-                html.Div("Trade Execution: Operational Controls", className="kv-line"),
-                html.Div("Risk Guard: Active", className="kv-line"),
-                html.Div("Alerts: Enabled"),
+                html.Div("Data Layer", className="section-label"),
+                html.Div(f"Backend: {backend_name}", className="kv-line"),
+                html.Div(f"Status: {status_value}", className="kv-line"),
+                html.Div(f"Preserved: {preserve_label}"),
             ], className="compact-panel"),
             html.Div([
                 html.Div("Keep MT5 Alive", className="section-label"),

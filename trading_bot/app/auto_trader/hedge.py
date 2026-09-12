@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable
 
-from trading_bot.app.auto_trader.guards import normalize_side
+from trading_bot.risk.guards import normalize_side
 
 
 def trigger_hedge(

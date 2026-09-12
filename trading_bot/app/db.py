@@ -2,10 +2,14 @@ import json
 import os
 import sqlite3
 import time
+import warnings
 from contextlib import contextmanager
 
+from trading_bot.infrastructure.config.settings import get_settings
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DB_PATH = os.path.join(PROJECT_ROOT, "trading_data.db")
+DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "trading_data.db")
+DB_PATH = DEFAULT_DB_PATH
 
 AUTO_TRADE_PROFILE_KEYS = [
     "auto_trade_strategy_name",
@@ -93,6 +97,14 @@ AUTO_TRADE_RISK_POLICY_DEFAULTS = {
 
 @contextmanager
 def get_db():
+    settings = get_settings()
+    if settings.database_backend == "postgresql" and settings.legacy_sqlite_compat_mode:
+        warnings.warn(
+            "Legacy SQLite compatibility mode is enabled for migration support only. PostgreSQL is the active backend.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
@@ -645,6 +657,9 @@ def init_db():
 
 
 def migrate_legacy_json_to_db():
+    if os.path.abspath(os.path.normpath(DB_PATH)) != os.path.abspath(os.path.normpath(DEFAULT_DB_PATH)):
+        return
+
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     legacy_account = os.path.join(project_root, "account_state.json")
     legacy_trade = os.path.join(project_root, "trade_history.json")
@@ -688,12 +703,22 @@ def migrate_legacy_json_to_db():
             with open(legacy_trade, "r", encoding="utf-8") as f:
                 items = json.load(f)
             if isinstance(items, list):
+                valid_items = []
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    if not (item.get("trade_id") or item.get("symbol") or item.get("account_id") or item.get("broker_id")):
+                        continue
+                    if item.get("entryTime") is None and item.get("exitTime") is None:
+                        continue
+                    valid_items.append(item)
+
                 existing = get_trade_history()
                 existing_keys = {
                     (i.get("type"), i.get("entryTime"), i.get("exitTime"), i.get("entry"), i.get("exit"))
                     for i in existing
                 }
-                for item in items:
+                for item in valid_items:
                     key = (
                         item.get("type"),
                         item.get("entryTime"),
@@ -1508,7 +1533,7 @@ def upsert_trade_history_record(trade, match_open_window_seconds=300):
         return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
 
 
-def get_recent_closed_trades(limit=20, broker_id=None, account_id=None):
+def get_recent_closed_trades(limit=20, broker_id=None, account_id=None, symbol=None):
     safe_limit = max(1, min(int(limit or 20), 500))
     with get_db() as conn:
         clauses = ["status = 'closed'"]
@@ -1519,6 +1544,9 @@ def get_recent_closed_trades(limit=20, broker_id=None, account_id=None):
         if account_id is not None:
             clauses.append("COALESCE(account_id, -1) = ?")
             params.append(int(account_id))
+        if symbol is not None:
+            clauses.append("symbol = ?")
+            params.append(str(symbol))
         rows = conn.execute(
             f"""
             SELECT trade_id, type, symbol, lot, ticket, entry, exit, profit,

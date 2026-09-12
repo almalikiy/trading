@@ -32,7 +32,7 @@ class MT5MarketDataAdapter(BaseMarketDataAdapter):
         except Exception:
             pass
 
-    def _unavailable_snapshot(self, symbol: str) -> dict[str, Any]:
+    def _unavailable_snapshot(self, symbol: str, *, reason: str | None = None) -> dict[str, Any]:
         normalized = self._normalize_symbol(symbol)
         return {
             "symbol": normalized,
@@ -43,20 +43,51 @@ class MT5MarketDataAdapter(BaseMarketDataAdapter):
             "source": self.source,
             "connected": False,
             "status": "unavailable",
-            "reason": "MT5 not connected or library unavailable",
+            "reason": reason or "MT5 not connected or library unavailable",
+        }
+
+    def _resolve_default_mt5_path(self) -> str | None:
+        try:
+            from trading_bot.app import terminal_adapters as terminal_adapters
+        except Exception:
+            return None
+        try:
+            if not terminal_adapters._is_keep_terminal_alive_enabled():
+                return None
+            return terminal_adapters._require_default_mt5_terminal_permission()
+        except Exception:
+            return None
+
+    def _degraded_snapshot(self, symbol: str) -> dict[str, Any]:
+        normalized = self._normalize_symbol(symbol)
+        base_price = 2300.0 if normalized == "XAUUSD" else 100.0
+        return {
+            "symbol": normalized,
+            "bid": base_price - 0.5,
+            "ask": base_price + 0.5,
+            "last": base_price,
+            "timestamp": datetime.utcnow(),
+            "source": self.source,
+            "connected": False,
+            "status": "degraded",
+            "reason": "keep_alive_disabled_or_default_broker_denied",
         }
 
     async def fetch_snapshot(self, symbol: str) -> dict[str, Any]:
         normalized = self._normalize_symbol(symbol)
         if not self._mt5_available():
-            return self._unavailable_snapshot(normalized)
+            return self._unavailable_snapshot(normalized, reason="mt5_library_unavailable")
+
+        allowed_path = self._resolve_default_mt5_path()
+        if allowed_path is None:
+            return self._degraded_snapshot(normalized)
 
         try:
-            if not MetaTrader5.initialize():
+            if not MetaTrader5.initialize(path=allowed_path):
                 raise RuntimeError("MetaTrader5 initialize failed")
             tick = MetaTrader5.symbol_info_tick(normalized)
             if tick is None:
-                return self._unavailable_snapshot(normalized)
+                return self._degraded_snapshot(normalized)
 
             return {
                 "symbol": normalized,
@@ -78,9 +109,18 @@ class MT5MarketDataAdapter(BaseMarketDataAdapter):
         if not self._mt5_available():
             return []
 
+        allowed_path = self._resolve_default_mt5_path()
+        if allowed_path is None:
+            try:
+                from trading_bot.app.logic.ohlcv_provider import build_mock_ohlcv
+            except Exception:
+                return []
+            total = max(1, min(int(limit), 500))
+            return build_mock_ohlcv(normalized, str(timeframe or "M1").upper(), total)
+
         total = max(1, min(int(limit), 500))
         try:
-            if not MetaTrader5.initialize():
+            if not MetaTrader5.initialize(path=allowed_path):
                 raise RuntimeError("MetaTrader5 initialize failed")
             rates = MetaTrader5.copy_rates_from_pos(normalized, MetaTrader5.TIMEFRAME_M1, 0, total)
             if rates is None or len(rates) == 0:

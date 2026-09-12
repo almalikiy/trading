@@ -65,8 +65,10 @@ def open_real_trade(symbol: str, lot: float, trade_type: str, terminal_path: str
 
     initialized = False
     try:
-        _require_mt5_keep_alive_permission(terminal_path)
-        initialized = bool(mt5.initialize(path=terminal_path)) if terminal_path else bool(mt5.initialize())
+        from trading_bot.app import terminal_adapters as terminal_adapters
+
+        allowed_path = terminal_adapters._require_default_mt5_terminal_permission(terminal_path)
+        initialized = bool(mt5.initialize(path=allowed_path))
         if not initialized:
             log_mt5_error("MT5 not connected (open_real_trade)")
             raise RuntimeError("MT5 not connected")
@@ -120,8 +122,10 @@ def close_real_trade(symbol: str, lot: float, ticket: int, terminal_path: str | 
 
     initialized = False
     try:
-        _require_mt5_keep_alive_permission(terminal_path)
-        initialized = bool(mt5.initialize(path=terminal_path)) if terminal_path else bool(mt5.initialize())
+        from trading_bot.app import terminal_adapters as terminal_adapters
+
+        allowed_path = terminal_adapters._require_default_mt5_terminal_permission(terminal_path)
+        initialized = bool(mt5.initialize(path=allowed_path))
         if not initialized:
             log_mt5_error("MT5 not connected (close_real_trade)")
             raise RuntimeError("MT5 not connected")

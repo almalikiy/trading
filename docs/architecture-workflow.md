@@ -2,70 +2,73 @@
 
 ```mermaid
 flowchart TD
-    A[User membuka dashboard / klik tombol / input parameter] --> B[frontend_dash/app.py]
-    B --> C[build_layout()]
-    C --> D[Dash callbacks registration]
-    D --> E[frontend_dash/pages/overview.py / settings.py / strategy.py]
+    A[Backend start: uvicorn trading_bot.app.main:app] --> B[trading_bot/app/main.py]
+    B --> C[create_app() + include_router()]
+    C --> D[startup bootstrap]
+    D --> E[trading_bot/app/bootstrap.py]
+    E --> F[load settings + default broker + DB state + strategy config]
 
-    E --> F[frontend_dash/api/client.py]
-    F --> G[api_get() / api_post()]
+    F --> G{Auto trade enabled?}
+    G -- Yes --> H[trading_bot/app/auto_trader / cycle / hedge]
+    G -- No --> I[backend tetap alive untuk API, monitoring, websocket]
 
-    G --> H[HTTP request ke backend FastAPI]
-    H --> I[trading_bot/app/main.py]
-    I --> J[FastAPI app + router]
-    J --> K[Endpoint route]
+    H --> J[analyze_symbol() / generate_signal() / risk evaluation]
+    J --> K[trading_bot/app/logic/]
+    K --> L[market data + indicators + execution logic]
 
-    K --> L{Jenis endpoint}
-    L -->|/dashboard/summary| M[trading_bot/app/api/routes/dashboard.py]
-    L -->|/account/*| N[trading_bot/app/api/routes/account.py]
-    L -->|/mt5/*| O[trading_bot/app/api/routes/mt5.py]
-    L -->|/signal / /ohlcv / /trade/*| P[route lain]
-    L -->|/strategies/*| Q[trading_bot/app/api/routes/strategies.py]
+    L --> M{MT5 terminal available and allowed?}
+    M -- Yes --> N[trading_bot/app/terminal_adapters.py]
+    M -- No / degraded --> O[degraded mode / cached data / no forced MT5 startup]
 
-    M --> R[db.get_account_state() / list_brokers() / get_open_trades_count()]
-    N --> S[set_keep_mt5_alive() / get_keep_mt5_alive_status()]
-    O --> T[status MT5 + background sync]
-    P --> U[logic / services / persistence]
-    Q --> V[strategy registry / config]
+    N --> P[MetaTrader5 initialize / terminal check / trade execution]
+    P --> Q[open_trade / close_trade / sync trade state]
 
-    R --> W[trading_bot/app/db.py]
-    S --> X[trading_bot/app/terminal_adapters.py]
-    T --> X
-    U --> X
-    V --> Y[trading_bot strategies / risk / adapters]
+    Q --> R[PostgreSQL primary store / SQLite compatibility shim during migration]
+    R --> S[State persisted]
 
-    W --> Z[SQLite / State storage]
-    X --> AA[MetaTrader5 / terminal / broker access]
-    Y --> AB[Signal / execution / risk logic]
+    I --> T[FastAPI routes]
+    H --> T
+    Q --> T
+    T --> U[/health / /signal / /ohlcv / /account / /trade / /brokers / /strategies]
 
-    M --> AC[JSON response]
-    N --> AC
-    O --> AC
-    P --> AC
-    Q --> AC
+    U --> V[backend JSON response]
+    V --> W[Optional dashboard consumer]
+    W --> X[frontend_dash/app.py]
+    X --> Y[Dash callbacks + page render]
+    Y --> Z[Browser UI update]
 
-    AC --> AD[frontend_dash/api/client.py parse JSON]
-    AD --> AE[Dash callback update]
-    AE --> AF[html.Div / dcc.Graph / status label update]
-    AF --> AG[Browser UI render]
+    Z --> AA[User monitoring / manual control]
 
-    AG --> AH[User melihat hasil terbaru]
+    style A fill:#dbeafe,stroke:#2563eb,stroke-width:2px
+    style H fill:#dcfce7,stroke:#16a34a,stroke-width:2px
+    style W fill:#fef3c7,stroke:#d97706,stroke-width:2px
 ```
 
 ## Penjelasan singkat
 
-1. User berinteraksi dengan dashboard.
-2. Frontend Dash menangkap event dan memanggil callback.
-3. Frontend mengirim request HTTP ke backend FastAPI.
-4. Endpoint backend memproses request dan mengambil data dari DB atau MT5 adapter.
-5. Backend mengembalikan JSON ke frontend.
-6. Callback Dash memperbarui komponen UI dan browser menampilkan hasil baru.
+1. Entry point sistem adalah backend, bukan dashboard.
+2. Saat backend dinyalakan, app FastAPI langsung bootstrap konfigurasi, broker, state, dan siap menjalankan auto-trade.
+3. Dashboard hanya bersifat optional consumer: ia membaca data dari API/backend, tetapi backend tetap bisa bekerja tanpa UI.
+4. Auto-trade berjalan melalui pipeline:
+   - bootstrap
+   - auto trader
+   - signal/risk logic
+   - MT5 terminal adapter
+   - persist state ke database
+5. Frontend Dash berfungsi untuk monitoring, kontrol manual, dan visualisasi, bukan sebagai prasyarat utama agar backend bisa menjalankan strategi.
+
+## Arti penting untuk project ini
+
+- Backend adalah owner utama dari lifecycle trading.
+- Dashboard tidak boleh menjadi source of truth atau trigger utama.
+- MT5/terminal access harus dikendalikan dari backend melalui policy aman, bukan dari UI.
+- Auto-trade dan monitoring bisa berjalan terpisah: backend tetap aktif meski dashboard dimatikan.
 
 ## Sumber utama
 
-- [frontend_dash/app.py](../frontend_dash/app.py)
-- [frontend_dash/api/client.py](../frontend_dash/api/client.py)
-- [frontend_dash/callbacks/navigation_callbacks.py](../frontend_dash/callbacks/navigation_callbacks.py)
 - [trading_bot/app/main.py](../trading_bot/app/main.py)
-- [trading_bot/app/api/routes/dashboard.py](../trading_bot/app/api/routes/dashboard.py)
+- [trading_bot/app/bootstrap.py](../trading_bot/app/bootstrap.py)
+- [trading_bot/app/auto_trader](../trading_bot/app/auto_trader)
+- [trading_bot/app/logic](../trading_bot/app/logic)
 - [trading_bot/app/terminal_adapters.py](../trading_bot/app/terminal_adapters.py)
+- [frontend_dash/app.py](../frontend_dash/app.py)

@@ -221,7 +221,7 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
         summary, account, positions, signal, candles, default_broker, mt5_status, background_sync, auto_trade_health = await asyncio.gather(
             _safe_api_get("/dashboard/summary"),
             _safe_api_get("/account/state"),
-            _safe_api_get("/trade/open_positions"),
+            _safe_api_get("/positions"),
             _safe_api_get("/signal", {"symbol": symbol, "mode": "real"}),
             _safe_api_get("/ohlcv", {"symbol": symbol, "timeframe": timeframe, "bars": bars}),
             _safe_api_get("/brokers/default"),
@@ -238,7 +238,21 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
         background_sync_data = as_mapping(background_sync)
         auto_trade_health_map = as_mapping(auto_trade_health)
 
-        position_rows = positions if isinstance(positions, list) else []
+        positions_data = positions if isinstance(positions, list) else []
+        position_rows: list[dict[str, Any]] = []
+        for item in positions_data:
+            if not isinstance(item, dict):
+                continue
+            nested = item.get("positions") if isinstance(item.get("positions"), list) else []
+            if nested:
+                for row in nested:
+                    if isinstance(row, dict):
+                        row_copy = dict(row)
+                        row_copy.setdefault("broker", item.get("broker") or item.get("broker_name") or "mt5")
+                        row_copy.setdefault("broker_name", row_copy.get("broker") or item.get("broker_name") or "mt5")
+                        position_rows.append(row_copy)
+            elif item.get("symbol"):
+                position_rows.append(item)
         candles_rows = candles if isinstance(candles, list) else []
 
         last_signal = str(signal_data.get("signal", "wait")).lower()
@@ -270,8 +284,8 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
         ]
 
         broker_summary = summary_data.get("brokers", []) if isinstance(summary_data.get("brokers", []), list) else []
-        mt5_connected = bool(mt5_status_data.get("connected", False))
-        background_sync_state = str(background_sync_data.get("sync_status", "idle") or "idle").lower()
+        mt5_connected = bool(mt5_status_data.get("connected", False) or mt5_status_data.get("ready", False))
+        background_sync_state = str(background_sync_data.get("sync_status", background_sync_data.get("status", "idle")) or "idle").lower()
         sync_status_label = background_sync_state.upper() if background_sync_state else "IDLE"
 
         metric_cards = [
@@ -288,6 +302,99 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
         signal_status = last_signal.upper() if last_signal in {"buy", "sell", "wait"} else "WAIT"
         signal_reason, key_areas, areas_map = _compute_signal_insight(candles_rows, signal_status, last_price)
         market_fig = _build_figure(candles_rows, areas_map)
+
+        stream_mode = str(signal_data.get("status", "degraded")).lower()
+        stream_notice = str(signal_data.get("notice") or "Stream running in safe mode.")
+        if not signal_data.get("notice") and not mt5_connected:
+            stream_notice = "MT5 Keep Alive is off. Stream is using cached/non-terminal data only."
+        degraded_banner = html.Div(
+            [
+                html.Div("Stream Status", className="subsection-label"),
+                html.Div(
+                    [
+                        html.Span("DEGRADED MODE" if stream_mode == "degraded" else "LIVE STREAM", className="status-dot pill-sync-queued" if stream_mode == "degraded" else "status-dot pill-sync-running"),
+                        html.Span(stream_notice),
+                    ],
+                    className="status-pill",
+                    id="stream-status",
+                ),
+            ],
+            className="panel",
+        )
+
+        status_summary_panel = html.Div(
+            [
+                html.Div("System Status", className="section-label"),
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.Span("MT5", className="summary-badge summary-badge-blue"),
+                                html.Div(
+                                    [
+                                        html.Div("Terminal", className="summary-label"),
+                                        html.Div("Connected" if mt5_connected else "Offline", className="summary-value"),
+                                    ],
+                                    className="summary-item",
+                                ),
+                            ],
+                            className="summary-tile",
+                        ),
+                        html.Div(
+                            [
+                                html.Span("Stream", className="summary-badge summary-badge-green" if stream_mode != "degraded" else "summary-badge summary-badge-orange"),
+                                html.Div(
+                                    [
+                                        html.Div("Mode", className="summary-label"),
+                                        html.Div("Live" if stream_mode != "degraded" else "Degraded", className="summary-value"),
+                                    ],
+                                    className="summary-item",
+                                ),
+                            ],
+                            className="summary-tile",
+                        ),
+                        html.Div(
+                            [
+                                html.Span("Broker", className="summary-badge summary-badge-sky"),
+                                html.Div(
+                                    [
+                                        html.Div("Default Broker", className="summary-label"),
+                                        html.Div(default_broker_data.get("name", "-") if default_broker_data else "-", className="summary-value"),
+                                    ],
+                                    className="summary-item",
+                                ),
+                            ],
+                            className="summary-tile",
+                        ),
+                        html.Div(
+                            [
+                                html.Span("Data", className="summary-badge summary-badge-purple"),
+                                html.Div(
+                                    [
+                                        html.Div("Source", className="summary-label"),
+                                        html.Div(indicators.get("source", "market-data"), className="summary-value"),
+                                    ],
+                                    className="summary-item",
+                                ),
+                            ],
+                            className="summary-tile",
+                        ),
+                    ],
+                    className="status-summary-grid",
+                ),
+                html.Div(stream_notice, className="status-summary-note"),
+            ],
+            className="panel",
+            id="status-summary-panel",
+        )
+
+        stream_badge_text = "DEGRADED" if stream_mode == "degraded" else "LIVE"
+        stream_badge_class = "pill-sync-queued" if stream_mode == "degraded" else "pill-sync-running"
+        global_badge_state = {
+            "text": stream_badge_text,
+            "class": stream_badge_class,
+            "notice": stream_notice,
+        }
 
         auto_trade_checks = auto_trade_health_map.get("checks", []) if isinstance(auto_trade_health_map.get("checks", []), list) else []
         auto_trade_enabled = bool(
@@ -373,13 +480,22 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
                     ],
                     className="panel-header-row",
                 ),
-                dcc.Graph(figure=market_fig, config={"displayModeBar": False}, className="panel-wide"),
+                dcc.Graph(
+                    id="market-chart-live",
+                    figure=market_fig,
+                    config={"displayModeBar": False, "responsive": True},
+                    style={"height": "520px", "width": "100%"},
+                    className="panel-wide live-chart",
+                ),
+                html.Script(src="/assets/market_live_ws.js"),
             ],
             className="panel panel-wide panel-chart",
         )
 
         return html.Div(
             [
+                degraded_banner,
+                status_summary_panel,
                 html.Div(metric_cards, className="metrics-grid"),
                 chart_panel,
                 html.Div(

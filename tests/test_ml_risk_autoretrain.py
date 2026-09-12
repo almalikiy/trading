@@ -3,8 +3,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import app.db as db
-import app.ml_risk as ml_risk
+import trading_bot.app.db as db
+import trading_bot.app.ml_risk as ml_risk
 
 
 def _insert_closed_trades(start_index: int, count: int, account_id: int = 9001):
