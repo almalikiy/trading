@@ -17,8 +17,7 @@ class Settings(BaseSettings):
     environment: Literal["local", "staging", "production"] = "local"
     debug: bool = True
 
-    database_backend: Literal["postgresql", "sqlite"] = "postgresql"
-    legacy_sqlite_compat_mode: bool = False
+    database_backend: Literal["postgresql"] = "postgresql"
 
     postgres_enabled: bool = True
     postgres_host: str = "localhost"

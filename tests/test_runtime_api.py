@@ -122,6 +122,30 @@ def test_broker_launch_and_sync_routes_exist_for_selected_broker():
     assert "synced" in sync.json() or "status" in sync.json()
 
 
+def test_signal_endpoint_uses_ohlcv_trend_instead_of_hardcoded_wait(monkeypatch):
+    import trading_bot.app.api.routes.market_data as market_data_route
+
+    class FakeAdapter:
+        async def fetch_snapshot(self, symbol):
+            return {"symbol": symbol, "last": 100.0, "bid": 99.8, "ask": 100.2, "connected": True, "status": "ok", "source": "mock"}
+
+        async def fetch_bars(self, symbol, timeframe, limit=200):
+            now = int(time.time())
+            return [
+                {"timestamp": __import__("datetime").datetime.fromtimestamp(now - 300 - i * 60), "open": 99.0 + i, "high": 100.0 + i, "low": 98.5 + i, "close": 100.5 + i, "volume": 10}
+                for i in range(5)
+            ]
+
+    monkeypatch.setattr(market_data_route, "_resolve_market_adapter", lambda symbol: FakeAdapter())
+
+    client = TestClient(app)
+    response = client.get("/signal?symbol=XAUUSD&mode=real")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["signal"] in {"buy", "sell", "wait"}
+    assert payload["signal"] != "wait"
+
+
 def test_signal_endpoint_exists_and_returns_payload():
     client = TestClient(app)
     response = client.get("/signal?symbol=XAUUSD&mode=real")

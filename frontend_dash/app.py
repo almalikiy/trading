@@ -33,6 +33,7 @@ def build_layout() -> html.Div:  # Build the main layout of the Dash app
             dcc.Interval(id="refresh-interval", interval=REFRESH_MS, n_intervals=0),
             dcc.Store(id="drawer-collapsed", data=False),
             dcc.Store(id="theme-mode", data="dark", storage_type="local"),
+            dcc.Store(id="global-ui-state", data={}),
             dcc.Store(id="stream-status", data={"mode": "degraded", "notice": "MT5 Keep Alive is off. Stream is using cached/non-terminal data only."}),
             build_sidebar(),
             html.Div(

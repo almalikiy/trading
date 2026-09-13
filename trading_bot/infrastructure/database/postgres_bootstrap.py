@@ -22,7 +22,7 @@ def ensure_brokers_table(conn: Any, *, schema: str = "public") -> None:
         f"""
         CREATE TABLE IF NOT EXISTS {schema}.brokers (
             id SERIAL PRIMARY KEY,
-            name VARCHAR(200) NOT NULL,
+            name VARCHAR(200) NOT NULL UNIQUE,
             platform VARCHAR(50) NOT NULL DEFAULT 'mt5',
             terminal_path TEXT,
             execution_mode VARCHAR(50) DEFAULT 'mouse',
@@ -48,6 +48,17 @@ def ensure_brokers_table(conn: Any, *, schema: str = "public") -> None:
                   AND column_name = 'default_symbol'
             ) THEN
                 ALTER TABLE {schema}.brokers ADD COLUMN default_symbol VARCHAR(50) DEFAULT 'XAUUSD';
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conrelid = '{schema}.brokers'::regclass
+                  AND contype = 'u'
+                  AND conname = '{schema}_brokers_name_key'
+            ) THEN
+                CREATE UNIQUE INDEX IF NOT EXISTS {schema}_brokers_name_key
+                    ON {schema}.brokers (name);
             END IF;
         END $$;
         """

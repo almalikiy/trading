@@ -242,48 +242,70 @@ def _build_figure(candles: list[dict[str, Any]], areas_map: dict[str, float] | N
     return fig
 
 
-def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
+def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any, global_state: dict[str, Any] | None = None):
     symbol = (symbol or DEFAULT_SYMBOL).upper()
     timeframe = timeframe or DEFAULT_TIMEFRAME
     bars = _safe_int(bars, DEFAULT_BARS)
 
     async def _load_data() -> html.Div:
-        try:
-            summary, account, positions, signal, candles, default_broker, mt5_status, background_sync, auto_trade_health, auto_trade_runtime, brokers, auto_trade_constraints, auto_trade_stats, auto_trade_events, mt5_error_log, mt5_error_log_summary = await asyncio.gather(
-                _safe_api_get("/dashboard/summary"),
-                _safe_api_get("/account/state"),
-                _safe_api_get("/positions"),
-                _safe_api_get("/signal", {"symbol": symbol, "mode": "real"}),
-                _safe_api_get("/ohlcv", {"symbol": symbol, "timeframe": timeframe, "bars": bars}),
-                _safe_api_get("/brokers/default"),
-                _safe_api_get("/mt5/status"),
-                _safe_api_get("/mt5/background_sync_status"),
-                _safe_api_get("/account/auto_trade_health"),
-                _safe_api_get("/account/auto_trade_runtime"),
-                _safe_api_get("/brokers", {"include_inactive": "true"}),
-                _safe_api_get("/account/auto_trade_constraints"),
-                _safe_api_get("/account/auto_trade_stats", {"window_days": 30}),
-                _safe_api_get("/account/auto_trade_events", {"limit": 10}),
-                _safe_api_get("/mt5/error_log", {"limit": 8}),
-                _safe_api_get("/mt5/error_log_summary", {"limit": 200}),
-            )
-        except Exception:
-            summary = {"brokers": []}
-            account = {"balance": 0.0, "equity": 0.0, "auto_trade_enabled": False, "enable_real_trade": False}
-            positions = []
-            signal = {"signal": "wait", "indicators": {"last": 0.0, "source": "market-data"}, "status": "degraded", "notice": "Backend unavailable; showing offline fallback."}
-            candles = []
-            default_broker = {}
-            mt5_status = {"connected": False}
-            background_sync = {"sync_status": "idle"}
-            auto_trade_health = {"auto_trade_enabled": False, "checks": []}
-            auto_trade_runtime = {}
-            brokers = []
-            auto_trade_constraints = {"constraints": {}}
-            auto_trade_stats = {"stats": {}}
-            auto_trade_events = {"events": []}
-            mt5_error_log = {"errors": []}
-            mt5_error_log_summary = {"errors": []}
+        state = as_mapping(global_state) if isinstance(global_state, dict) else {}
+        if state:
+            summary = state.get("summary", {"brokers": []})
+            account = state.get("account", {"balance": 0.0, "equity": 0.0, "auto_trade_enabled": False, "enable_real_trade": False})
+            positions = state.get("positions", [])
+            signal = state.get("signal", {"signal": "wait", "indicators": {"last": 0.0, "source": "market-data"}, "status": "degraded", "notice": "Backend unavailable; showing offline fallback."})
+            candles = state.get("candles", [])
+            default_broker = state.get("default_broker", {})
+            mt5_status = state.get("mt5_status", {"connected": False})
+            background_sync = state.get("background_sync", {"sync_status": "idle"})
+            auto_trade_health = state.get("auto_trade_health", {"auto_trade_enabled": False, "checks": []})
+            auto_trade_runtime = state.get("auto_trade_runtime", {})
+            brokers = state.get("brokers", [])
+            auto_trade_constraints = state.get("auto_trade_constraints", {"constraints": {}})
+            auto_trade_stats = state.get("auto_trade_stats", {"stats": {}})
+            auto_trade_events = state.get("auto_trade_events", {"events": []})
+            mt5_error_log = state.get("mt5_error_log", {"errors": []})
+            mt5_error_log_summary = state.get("mt5_error_log_summary", {"errors": []})
+            keep_alive_status = state.get("keep_alive_status", {"enabled": False, "status": "disabled"})
+        else:
+            try:
+                summary, account, positions, signal, candles, default_broker, mt5_status, background_sync, auto_trade_health, auto_trade_runtime, brokers, auto_trade_constraints, auto_trade_stats, auto_trade_events, mt5_error_log, mt5_error_log_summary, keep_alive_status = await asyncio.gather(
+                    _safe_api_get("/dashboard/summary"),
+                    _safe_api_get("/account/state"),
+                    _safe_api_get("/positions"),
+                    _safe_api_get("/signal", {"symbol": symbol, "mode": "real"}),
+                    _safe_api_get("/ohlcv", {"symbol": symbol, "timeframe": timeframe, "bars": bars}),
+                    _safe_api_get("/brokers/default"),
+                    _safe_api_get("/mt5/status"),
+                    _safe_api_get("/mt5/background_sync_status"),
+                    _safe_api_get("/account/auto_trade_health"),
+                    _safe_api_get("/account/auto_trade_runtime"),
+                    _safe_api_get("/brokers", {"include_inactive": "true"}),
+                    _safe_api_get("/account/auto_trade_constraints"),
+                    _safe_api_get("/account/auto_trade_stats", {"window_days": 30}),
+                    _safe_api_get("/account/auto_trade_events", {"limit": 10}),
+                    _safe_api_get("/mt5/error_log", {"limit": 8}),
+                    _safe_api_get("/mt5/error_log_summary", {"limit": 200}),
+                    _safe_api_get("/account/keep_mt5_alive_status"),
+                )
+            except Exception:
+                summary = {"brokers": []}
+                account = {"balance": 0.0, "equity": 0.0, "auto_trade_enabled": False, "enable_real_trade": False}
+                positions = []
+                signal = {"signal": "wait", "indicators": {"last": 0.0, "source": "market-data"}, "status": "degraded", "notice": "Backend unavailable; showing offline fallback."}
+                candles = []
+                default_broker = {}
+                mt5_status = {"connected": False}
+                background_sync = {"sync_status": "idle"}
+                auto_trade_health = {"auto_trade_enabled": False, "checks": []}
+                auto_trade_runtime = {}
+                brokers = []
+                auto_trade_constraints = {"constraints": {}}
+                auto_trade_stats = {"stats": {}}
+                auto_trade_events = {"events": []}
+                mt5_error_log = {"errors": []}
+                mt5_error_log_summary = {"errors": []}
+                keep_alive_status = {"enabled": False, "status": "disabled"}
 
         signal_data = as_mapping(signal)
         account_data = as_mapping(account)
@@ -294,6 +316,7 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
         if not default_broker_data:
             default_broker_data = _resolve_default_broker_record(broker_rows)
         mt5_status_data = as_mapping(mt5_status)
+        keep_alive_status_data = as_mapping(keep_alive_status)
         background_sync_data = as_mapping(background_sync)
         auto_trade_health_map = as_mapping(auto_trade_health)
         auto_trade_runtime_map = as_mapping(auto_trade_runtime)
@@ -371,8 +394,15 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
         signal_reason, key_areas, areas_map = _compute_signal_insight(candles_rows, signal_status, last_price)
         market_fig = _build_figure(candles_rows, areas_map)
 
-        stream_mode = str(signal_data.get("status", "degraded")).lower()
-        stream_notice = str(signal_data.get("notice") or "Stream running in safe mode.")
+        from frontend_dash.state import resolve_stream_state
+
+        keep_alive_enabled = bool(keep_alive_status_data.get("enabled", False))
+        stream_mode, stream_badge, stream_notice = resolve_stream_state(
+            signal_status=signal_data.get("status"),
+            keep_alive_enabled=keep_alive_enabled,
+            mt5_terminal_state=mt5_terminal_state,
+            signal_notice=signal_data.get("notice"),
+        )
         if not signal_data.get("notice") and mt5_terminal_state == "offline":
             stream_notice = "MT5 Keep Alive is off. Stream is using cached/non-terminal data only."
         elif not signal_data.get("notice") and mt5_terminal_state == "open":

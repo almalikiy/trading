@@ -22,6 +22,7 @@ def _resolve_market_adapter(symbol: str):
 async def get_signal(symbol: str = "XAUUSD", mode: str = "real") -> dict[str, object]:
     adapter = _resolve_market_adapter(symbol)
     snapshot = await adapter.fetch_snapshot(symbol)
+    candles = await adapter.fetch_bars(symbol, "M1", limit=50)
 
     def as_float(value: object, default: float = 0.0) -> float:
         try:
@@ -30,9 +31,26 @@ async def get_signal(symbol: str = "XAUUSD", mode: str = "real") -> dict[str, ob
             return float(default)
 
     status = str(snapshot.get("status") or ("ok" if snapshot.get("connected") else "degraded")).lower()
+    last_price = as_float(snapshot.get("last"), 0.0)
     signal_status = "wait"
-    if status == "ok":
-        signal_status = "wait"
+    if candles:
+        closes = []
+        for candle in candles:
+            close_value = as_float(candle.get("close"), 0.0)
+            if close_value:
+                closes.append(close_value)
+        if len(closes) >= 3:
+            last = closes[-1]
+            prev = closes[-2]
+            prev_prev = closes[-3]
+            trend_up = last > prev > prev_prev
+            trend_down = last < prev < prev_prev
+            if trend_up and last >= last_price:
+                signal_status = "buy"
+            elif trend_down and last <= last_price:
+                signal_status = "sell"
+            else:
+                signal_status = "wait"
 
     return {
         "signal": signal_status,
@@ -41,9 +59,9 @@ async def get_signal(symbol: str = "XAUUSD", mode: str = "real") -> dict[str, ob
         "ready": bool(snapshot.get("connected", False)),
         "indicators": {
             "source": snapshot.get("source", "market-data"),
-            "last": as_float(snapshot.get("last"), 0.0),
-            "bid": as_float(snapshot.get("bid"), 0.0),
-            "ask": as_float(snapshot.get("ask"), 0.0),
+            "last": last_price,
+            "bid": as_float(snapshot.get("bid"), last_price),
+            "ask": as_float(snapshot.get("ask"), last_price),
         },
         "simulator": {},
         "cached": False,
@@ -60,7 +78,14 @@ async def get_ohlcv(symbol: str = "XAUUSD", timeframe: str = "M1", bars: int = 1
     adapter = _resolve_market_adapter(symbol)
     candles = await adapter.fetch_bars(symbol, timeframe, limit=max(1, int(bars)))
     if not candles:
-        return []
+        try:
+            from trading_bot.app.logic.ohlcv_provider import build_mock_ohlcv
+
+            fallback = build_mock_ohlcv(symbol, str(timeframe or "M1").upper(), max(1, int(bars)))
+            if fallback:
+                candles = fallback
+        except Exception:
+            return []
     return [
         {
             "time": int(item["timestamp"].timestamp()) if item.get("timestamp") else int(datetime.utcnow().timestamp()),
@@ -68,7 +93,7 @@ async def get_ohlcv(symbol: str = "XAUUSD", timeframe: str = "M1", bars: int = 1
             "high": float(item.get("high", 0.0) or 0.0),
             "low": float(item.get("low", 0.0) or 0.0),
             "close": float(item.get("close", 0.0) or 0.0),
-            "tick_volume": int(item.get("volume", 0) or 0),
+            "tick_volume": int(item.get("volume", 0) or item.get("tick_volume", 0) or 0),
             "symbol": symbol,
             "timeframe": timeframe,
         }

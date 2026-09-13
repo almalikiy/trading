@@ -13,21 +13,29 @@ def _format_money(value):
         return "-"
 
 
-def render_settings_page():
+def render_settings_page(global_state: dict | None = None):
+    state = as_mapping(global_state) if isinstance(global_state, dict) else {}
     try:
-        account = api_get("/account/state")
-        brokers = api_get("/brokers", {"include_inactive": "true"})
+        if state:
+            account = state.get("account")
+            brokers = state.get("brokers")
+            keep_alive_status = state.get("keep_alive_status")
+            database_status = state.get("database_status")
+        else:
+            account = api_get("/account/state")
+            brokers = api_get("/brokers", {"include_inactive": "true"})
+            keep_alive_status = api_get("/account/keep_mt5_alive_status")
+            database_status = api_get("/health/database")
         account_data = as_mapping(account)
         rows = brokers if isinstance(brokers, list) else []
 
-        keep_alive_status = as_mapping(api_get("/account/keep_mt5_alive_status"))
+        keep_alive_status = as_mapping(keep_alive_status)
         keep_alive_enabled = bool(keep_alive_status.get("enabled", bool(account_data.get("keep_terminal_alive", False))))
         keep_alive_mode = "ON" if keep_alive_enabled else "OFF"
 
-        database_status = as_mapping(api_get("/health/database"))
-        backend_name = str(database_status.get("backend", "postgresql")).title()
-        status_value = str(database_status.get("status", "unknown")).title()
-        preserve_label = "broker list only" if bool(database_status.get("legacy_sqlite_compat_mode", False)) else "full reset policy"
+        database_status = as_mapping(database_status)
+        backend_name = "PostgreSQL"
+        status_value = str(database_status.get("status", "healthy")).title()
 
         default_broker_name = next((as_mapping(r).get("name", "-") for r in rows if bool(as_mapping(r).get("is_default"))), "-")
 
@@ -49,7 +57,7 @@ def render_settings_page():
                 html.Div("Data Layer", className="section-label"),
                 html.Div(f"Backend: {backend_name}", className="kv-line"),
                 html.Div(f"Status: {status_value}", className="kv-line"),
-                html.Div(f"Preserved: {preserve_label}"),
+                html.Div(f"Reset Policy: clean PostgreSQL runtime"),
                 html.Div(f"MT5 Keep Alive: {keep_alive_mode} • {keep_alive_status.get('status', 'disabled').title()}", className="kv-line"),
             ], className="compact-panel"),
         ]

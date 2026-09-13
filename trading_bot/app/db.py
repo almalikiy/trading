@@ -1,9 +1,7 @@
 import json
 import os
 import re
-import sqlite3
 import time
-import warnings
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -13,8 +11,6 @@ from trading_bot.infrastructure.config.settings import get_settings
 from trading_bot.infrastructure.database.postgres_bootstrap import build_postgres_dsn
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "trading_data.db")
-DB_PATH = DEFAULT_DB_PATH
 
 AUTO_TRADE_PROFILE_KEYS = [
     "auto_trade_strategy_name",
@@ -353,6 +349,12 @@ class PostgresRuntimeConnection:
     def _normalize_identifier(name: str) -> str:
         return str(name).strip().strip('"`[]').lower()
 
+    @property
+    def lastrowid(self):
+        if self._cursor is None:
+            return None
+        return getattr(self._cursor, "lastrowid", None)
+
     def fetchone(self):
         if self._cursor is None:
             return None
@@ -393,28 +395,11 @@ class PostgresRuntimeConnection:
 @contextmanager
 def get_db():
     settings = get_settings()
-    default_db_path = os.path.abspath(DEFAULT_DB_PATH)
-    current_db_path = os.path.abspath(DB_PATH)
-    is_default_runtime_db = current_db_path == default_db_path
 
-    if settings.database_backend == "postgresql" and not settings.legacy_sqlite_compat_mode:
-        conn = PostgresRuntimeConnection(build_postgres_dsn(settings))
-        try:
-            yield conn
-        finally:
-            conn.commit()
-            conn.close()
-        return
+    if settings.database_backend != "postgresql":
+        raise RuntimeError("This project is PostgreSQL-only. SQLite support has been removed.")
 
-    if settings.database_backend == "postgresql" and settings.legacy_sqlite_compat_mode and is_default_runtime_db:
-        warnings.warn(
-            "Legacy SQLite compatibility mode is enabled for migration support only. PostgreSQL is the active backend.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = PostgresRuntimeConnection(build_postgres_dsn(settings))
     try:
         yield conn
     finally:
@@ -951,6 +936,13 @@ def init_db():
             )
             """
         )
+        if isinstance(conn, PostgresRuntimeConnection):
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS brokers_name_key
+                ON brokers (name)
+                """
+            )
         _add_column_if_missing(conn, "brokers", "default_symbol", "TEXT NOT NULL DEFAULT 'XAUUSD'")
 
         now = int(time.time())
@@ -973,106 +965,6 @@ def init_db():
             if first:
                 conn.execute("UPDATE brokers SET is_default = 1 WHERE id = ?", (first["id"],))
 
-    if _legacy_json_migration_enabled() and os.path.abspath(os.path.normpath(DB_PATH)) == os.path.abspath(os.path.normpath(DEFAULT_DB_PATH)):
-        migrate_legacy_json_to_db()
-
-
-def _legacy_json_migration_enabled() -> bool:
-    return os.environ.get("ALLOW_LEGACY_JSON_MIGRATION", "0").lower() in {"1", "true", "yes", "on"}
-
-
-def migrate_legacy_json_to_db():
-    if not _legacy_json_migration_enabled():
-        raise RuntimeError("legacy JSON migration is disabled by default. Set ALLOW_LEGACY_JSON_MIGRATION=1 only for explicit migration support.")
-
-    if os.path.abspath(os.path.normpath(DB_PATH)) != os.path.abspath(os.path.normpath(DEFAULT_DB_PATH)):
-        return
-
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    legacy_account = os.path.join(project_root, "account_state.json")
-    legacy_trade = os.path.join(project_root, "trade_history.json")
-    legacy_error = os.path.join(os.path.dirname(__file__), "mt5_error_log.json")
-
-    should_migrate_account = False
-    should_migrate_trade = False
-    should_migrate_error = False
-
-    with get_db() as conn:
-        row = conn.execute("SELECT COUNT(*) AS total FROM trade_history").fetchone()
-        should_migrate_trade = (row["total"] == 0)
-        row = conn.execute("SELECT COUNT(*) AS total FROM mt5_error_log").fetchone()
-        should_migrate_error = (row["total"] == 0)
-        row = conn.execute("SELECT balance, initial_balance FROM account_state WHERE id = 1").fetchone()
-        if row:
-            should_migrate_account = (float(row["balance"] or 0) == 1000.0 and float(row["initial_balance"] or 0) == 1000.0)
-
-    if should_migrate_account and os.path.exists(legacy_account):
-        try:
-            with open(legacy_account, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                state = get_account_state()
-                state.update({
-                    "balance": data.get("balance", state.get("balance", 1000)),
-                    "initial_balance": data.get("initial_balance", state.get("initial_balance", 1000)),
-                    "enable_real_trade": data.get("enable_real_trade", state.get("enable_real_trade", False)),
-                    "auto_analytic_tpsl": data.get("auto_analytic_tpsl", state.get("auto_analytic_tpsl", False)),
-                    "tp_value": data.get("tp_value", state.get("tp_value", 0.5)),
-                    "sl_value": data.get("sl_value", state.get("sl_value", None)),
-                    "lot": data.get("lot", state.get("lot", 0.01)),
-                    "max_open_trades": data.get("max_open_trades", state.get("max_open_trades", 1)),
-                })
-                save_account_state(state)
-        except Exception:
-            pass
-
-    if should_migrate_trade and os.path.exists(legacy_trade):
-        try:
-            with open(legacy_trade, "r", encoding="utf-8") as f:
-                items = json.load(f)
-            if isinstance(items, list):
-                valid_items = []
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    if not (item.get("trade_id") or item.get("symbol") or item.get("account_id") or item.get("broker_id")):
-                        continue
-                    if item.get("entryTime") is None and item.get("exitTime") is None:
-                        continue
-                    valid_items.append(item)
-
-                existing = get_trade_history()
-                existing_keys = {
-                    (i.get("type"), i.get("entryTime"), i.get("exitTime"), i.get("entry"), i.get("exit"))
-                    for i in existing
-                }
-                for item in valid_items:
-                    key = (
-                        item.get("type"),
-                        item.get("entryTime"),
-                        item.get("exitTime"),
-                        item.get("entry"),
-                        item.get("exit"),
-                    )
-                    if key in existing_keys:
-                        continue
-                    append_trade_history(item)
-        except Exception:
-            pass
-
-    if should_migrate_error and os.path.exists(legacy_error):
-        try:
-            with open(legacy_error, "r", encoding="utf-8") as f:
-                logs = json.load(f)
-            if isinstance(logs, list):
-                known = {(i.get("timestamp"), i.get("message")) for i in get_mt5_error_log()}
-                for row in logs:
-                    key = (row.get("timestamp"), row.get("message"))
-                    if key in known:
-                        continue
-                    log_mt5_error(row.get("message", ""), timestamp=row.get("timestamp"))
-        except Exception:
-            pass
 
 
 def ensure_default_account_state():

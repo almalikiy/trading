@@ -21,7 +21,6 @@ async def database_health() -> dict[str, Any]:
     payload = database_status(settings)
     payload.update({
         "database_backend": settings.database_backend,
-        "legacy_sqlite_compat_mode": settings.legacy_sqlite_compat_mode,
         "postgres_enabled": settings.postgres_enabled,
     })
     return payload

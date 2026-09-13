@@ -16,7 +16,6 @@ def bootstrap() -> dict[str, object]:
             "host": settings.postgres_host,
             "database": settings.postgres_db,
             "preserve_broker_data_only": settings.preserve_broker_data_only,
-            "legacy_sqlite_compat_mode": settings.legacy_sqlite_compat_mode,
         },
         "available_brokers": BrokerFactory.available(),
     }
