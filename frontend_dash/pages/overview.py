@@ -218,7 +218,7 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
     bars = _safe_int(bars, DEFAULT_BARS)
 
     async def _load_data() -> html.Div:
-        summary, account, positions, signal, candles, default_broker, mt5_status, background_sync, auto_trade_health = await asyncio.gather(
+        summary, account, positions, signal, candles, default_broker, mt5_status, background_sync, auto_trade_health, auto_trade_runtime, brokers, auto_trade_constraints, auto_trade_stats, auto_trade_events, mt5_error_log, mt5_error_log_summary = await asyncio.gather(
             _safe_api_get("/dashboard/summary"),
             _safe_api_get("/account/state"),
             _safe_api_get("/positions"),
@@ -228,6 +228,13 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
             _safe_api_get("/mt5/status"),
             _safe_api_get("/mt5/background_sync_status"),
             _safe_api_get("/account/auto_trade_health"),
+            _safe_api_get("/account/auto_trade_runtime"),
+            _safe_api_get("/brokers", {"include_inactive": "true"}),
+            _safe_api_get("/account/auto_trade_constraints"),
+            _safe_api_get("/account/auto_trade_stats", {"window_days": 30}),
+            _safe_api_get("/account/auto_trade_events", {"limit": 10}),
+            _safe_api_get("/mt5/error_log", {"limit": 8}),
+            _safe_api_get("/mt5/error_log_summary", {"limit": 200}),
         )
 
         signal_data = as_mapping(signal)
@@ -237,6 +244,15 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
         mt5_status_data = as_mapping(mt5_status)
         background_sync_data = as_mapping(background_sync)
         auto_trade_health_map = as_mapping(auto_trade_health)
+        auto_trade_runtime_map = as_mapping(auto_trade_runtime)
+        broker_rows = brokers if isinstance(brokers, list) else []
+        constraints_map = as_mapping(auto_trade_constraints.get("constraints") if isinstance(auto_trade_constraints, dict) else auto_trade_constraints)
+        stats_map = as_mapping(auto_trade_stats.get("stats") if isinstance(auto_trade_stats, dict) else auto_trade_stats)
+        events_payload = as_mapping(auto_trade_events)
+        event_rows = events_payload.get("events") if isinstance(events_payload.get("events"), list) else []
+        mt5_error_log_data = as_mapping(mt5_error_log)
+        mt5_error_summary_data = as_mapping(mt5_error_log_summary)
+        mt5_error_rows = mt5_error_log_data.get("errors") if isinstance(mt5_error_log_data.get("errors"), list) else []
 
         positions_data = positions if isinstance(positions, list) else []
         position_rows: list[dict[str, Any]] = []
@@ -416,6 +432,253 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
             className="panel",
         )
 
+        runtime_payload = as_mapping(auto_trade_runtime_map.get("runtime"))
+        runtime_loop_started = bool(runtime_payload.get("loop_started", False))
+        runtime_last_decision = str(runtime_payload.get("last_decision") or "unknown")
+        runtime_last_reason = str(runtime_payload.get("last_reason") or "idle")
+        runtime_last_signal = str(runtime_payload.get("last_signal") or "wait")
+        runtime_last_symbol = str(runtime_payload.get("last_symbol") or "-")
+        runtime_last_signal_score = _format_number(runtime_payload.get("last_signal_score", 0.0), 3)
+        runtime_last_open_attempt = as_mapping(runtime_payload.get("last_open_attempt"))
+        runtime_last_open_status = str(runtime_last_open_attempt.get("status") or runtime_payload.get("last_open_error") or "no_attempt")
+        runtime_last_open_error = str(runtime_payload.get("last_open_error") or runtime_last_open_attempt.get("error") or "none")
+        recent_runtime_events = runtime_payload.get("recent_events") if isinstance(runtime_payload.get("recent_events"), list) else []
+        skip_counts = runtime_payload.get("skip_counts") if isinstance(runtime_payload.get("skip_counts"), dict) else {}
+        runtime_events_list = []
+        for item in recent_runtime_events[:5]:
+            event = as_mapping(item)
+            ts = event.get("ts")
+            label = f"{event.get('decision', 'event')} • {event.get('reason', 'unknown')}"
+            if ts is not None:
+                label = f"{label} • {int(ts)}"
+            runtime_events_list.append(html.Li(label))
+        if not runtime_events_list:
+            runtime_events_list = [html.Li("No recent auto-trade events recorded yet.")]
+
+        runtime_panel = html.Div(
+            [
+                html.Div("Auto-Trade Runtime", className="section-label"),
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.Span("Loop", className="status-dot pill-sync-running" if runtime_loop_started else "status-dot pill-sync-idle"),
+                                html.Span("Running" if runtime_loop_started else "Idle"),
+                            ],
+                            className="status-pill",
+                        ),
+                        html.Div(
+                            [
+                                html.Span("Decision", className="status-dot pill-broker"),
+                                html.Span(runtime_last_decision.upper()),
+                            ],
+                            className="status-pill",
+                        ),
+                    ],
+                    className="status-row",
+                ),
+                html.Div(f"Reason: {runtime_last_reason}", className="kv-line"),
+                html.Div(f"Signal: {runtime_last_signal.upper()}", className="kv-line"),
+                html.Div(f"Signal Score: {runtime_last_signal_score}", className="kv-line"),
+                html.Div(f"Last Symbol: {runtime_last_symbol}", className="kv-line"),
+                html.Div(f"Open Attempt: {runtime_last_open_status.upper()}", className="kv-line"),
+                html.Div(f"Open Error: {runtime_last_open_error}", className="kv-line"),
+                html.Div("Skip Counts", className="subsection-label"),
+                html.Div(
+                    ", ".join(f"{key}={value}" for key, value in sorted(skip_counts.items())) if skip_counts else "No skips recorded.",
+                    className="kv-line",
+                ),
+                html.Div("Recent Events", className="subsection-label"),
+                html.Ul(runtime_events_list, className="analysis-list"),
+            ],
+            id="auto-trade-runtime-panel",
+            className="panel",
+        )
+
+        broker_items = []
+        for broker in broker_rows[:6]:
+            b = as_mapping(broker)
+            broker_items.append(
+                html.Div(
+                    [
+                        html.Div(b.get("name", "Broker"), className="broker-panel-name"),
+                        html.Div(
+                            [
+                                html.Span(f"{b.get('platform', '-')} • symbol {b.get('default_symbol', '-')}", className="kv-line"),
+                                html.Span("Default" if bool(b.get("is_default")) else "Available", className="status-dot pill-sync-running" if bool(b.get("is_default")) else "status-dot pill-sync-idle"),
+                            ],
+                            className="broker-panel-row",
+                        ),
+                    ],
+                    className="broker-panel-item",
+                )
+            )
+        if not broker_items:
+            broker_items = [html.Div("No broker definitions found.", className="kv-line")]
+
+        broker_panel = html.Div(
+            [
+                html.Div("Broker Management", className="section-label"),
+                html.Div(
+                    [
+                        html.Div(f"Default Broker: {default_broker_data.get('name', '-') if default_broker_data else '-'}", className="kv-line"),
+                        html.Div(f"Broker Count: {len(broker_rows)}", className="kv-line"),
+                        html.Div(f"Active Brokers: {sum(1 for row in broker_rows if bool(as_mapping(row).get('is_active')))}", className="kv-line"),
+                    ],
+                    className="kv-stack",
+                ),
+                html.Div(broker_items, className="broker-panel-list"),
+                html.Div(
+                    [
+                        html.Label("Set default broker", className="field-label"),
+                        dcc.Dropdown(
+                            id="broker-selector",
+                            options=[
+                                {"label": as_mapping(item).get("name", "Broker"), "value": str(as_mapping(item).get("id", ""))}
+                                for item in broker_rows
+                                if as_mapping(item).get("id") is not None
+                            ],
+                            value=(str((default_broker_data or {}).get("id", "")) if default_broker_data and default_broker_data.get("id") is not None else None),
+                            clearable=False,
+                            searchable=False,
+                            className="strategy-parameter-input",
+                        ),
+                        html.Button("Apply Default Broker", id="set-default-broker-button", className="action-button neutral", n_clicks=0),
+                    ],
+                    className="broker-panel-actions",
+                ),
+            ],
+            id="broker-management-panel",
+            className="panel",
+        )
+
+        constraint_summary = [
+            ["Broker", str(constraints_map.get("broker") or default_broker_data.get("name") or "-")],
+            ["Symbol", str(constraints_map.get("symbol") or account_data.get("auto_trade_symbol") or symbol)],
+            ["Lot", str(constraints_map.get("lot") or account_data.get("lot") or 0.01)],
+            ["Max Open Trades", str(constraints_map.get("max_open_trades") or account_data.get("max_open_trades") or 1)],
+            ["Risk %", str(constraints_map.get("risk_percent") or account_data.get("auto_trade_risk_percent") or 1.0)],
+        ]
+        blockers = auto_trade_health_map.get("blockers") if isinstance(auto_trade_health_map.get("blockers"), list) else []
+        blocker_items = [html.Li(str(item)) for item in blockers] if blockers else [html.Li("No active blockers.")]
+
+        stats_rows = stats_map if isinstance(stats_map, dict) else {}
+        stats_cards = [
+            html.Div([html.Div("Closed", className="metric-label"), html.Div(str(stats_rows.get("closed_trades", 0)), className="metric-value")], className="metric-card accent-blue"),
+            html.Div([html.Div("Winrate", className="metric-label"), html.Div(f"{float(stats_rows.get('winrate', 0.0) or 0.0):.1f}%", className="metric-value")], className="metric-card accent-green"),
+            html.Div([html.Div("Net P/L", className="metric-label"), html.Div(_format_money(stats_rows.get("net_profit", 0.0)), className="metric-value")], className="metric-card accent-amber"),
+            html.Div([html.Div("Max DD", className="metric-label"), html.Div(_format_money(stats_rows.get("max_drawdown", 0.0)), className="metric-value")], className="metric-card accent-pink"),
+        ]
+        latest_events = []
+        for item in event_rows[:5]:
+            event = as_mapping(item)
+            latest_events.append(
+                html.Li(f"{event.get('event_type', 'event')} • {event.get('reason', 'n/a')} • {event.get('decision', '') or 'decision'}")
+            )
+        if not latest_events:
+            latest_events = [html.Li("No recent auto-trade events.")]
+
+        constraints_panel = html.Div(
+            [
+                html.Div("Auto-Trade Constraints & Stats", className="section-label"),
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.Div("Constraint Snapshot", className="subsection-label"),
+                                html.Table(
+                                    [
+                                        html.Tr([html.Td(label, className="constraint-key"), html.Td(value, className="constraint-value")])
+                                        for label, value in constraint_summary
+                                    ],
+                                    className="constraint-table",
+                                ),
+                            ],
+                            className="constraint-block",
+                        ),
+                        html.Div(
+                            [
+                                html.Div("Blockers", className="subsection-label"),
+                                html.Ul(blocker_items, className="analysis-list"),
+                            ],
+                            className="constraint-block",
+                        ),
+                    ],
+                    className="constraint-stack",
+                ),
+                html.Div(stats_cards, className="metrics-grid"),
+                html.Div(
+                    [
+                        html.Div("Recent Decisions", className="subsection-label"),
+                        html.Ul(latest_events, className="analysis-list"),
+                    ],
+                    className="constraint-block",
+                ),
+            ],
+            id="auto-trade-constraints-panel",
+            className="panel",
+        )
+
+        mt5_error_summary = mt5_error_summary_data.get("total", len(mt5_error_rows))
+        mt5_error_latest = mt5_error_summary_data.get("latest") if isinstance(mt5_error_summary_data.get("latest"), dict) else None
+        mt5_error_by_broker = mt5_error_summary_data.get("by_broker") if isinstance(mt5_error_summary_data.get("by_broker"), dict) else {}
+        mt5_error_card_items = [
+            html.Div([html.Div("Total Errors", className="metric-label"), html.Div(str(mt5_error_summary), className="metric-value")], className="metric-card accent-blue"),
+            html.Div([html.Div("Latest", className="metric-label"), html.Div(str((mt5_error_latest or {}).get("broker_name") or (mt5_error_latest or {}).get("broker_id") or "-"), className="metric-value")], className="metric-card accent-amber"),
+            html.Div([html.Div("Brokers", className="metric-label"), html.Div(str(len(mt5_error_by_broker)), className="metric-value")], className="metric-card accent-green"),
+        ]
+        mt5_error_lines = []
+        for item in mt5_error_rows[:6]:
+            row = as_mapping(item)
+            msg = str(row.get("message") or row.get("error") or row.get("details") or "MT5 error without message")
+            broker = str(row.get("broker_name") or row.get("broker_id") or "unknown")
+            when = row.get("timestamp") or row.get("created_at") or row.get("time") or row.get("ts")
+            mt5_error_lines.append(html.Li(f"{broker} • {when} • {msg}"))
+        if not mt5_error_lines:
+            mt5_error_lines = [html.Li("No MT5 error logs recorded.")]
+
+        mt5_diagnostics_panel = html.Div(
+            [
+                html.Div("MT5 Diagnostics", className="section-label"),
+                html.Div(mt5_error_card_items, className="metrics-grid"),
+                html.Div(
+                    [
+                        html.Div("Recent MT5 Error Log", className="subsection-label"),
+                        html.Ul(mt5_error_lines, className="analysis-list"),
+                    ],
+                    className="constraint-block",
+                ),
+                html.Div(
+                    [
+                        html.Button("Clear MT5 Error Log", id="clear-mt5-log-button", className="action-button neutral", n_clicks=0),
+                        html.Div("No new MT5 errors recently.", id="mt5-diagnostics-panel-status", className="kv-line"),
+                    ],
+                    className="broker-panel-actions",
+                ),
+            ],
+            id="mt5-diagnostics-panel",
+            className="panel",
+        )
+
+        decision_event_rows = []
+        for item in event_rows[:8]:
+            event = as_mapping(item)
+            decision_type = str(event.get("event_type") or event.get("decision") or "event")
+            reason = str(event.get("reason") or event.get("message") or "n/a")
+            ts = event.get("timestamp") or event.get("ts") or event.get("created_at")
+            decision_event_rows.append(html.Li(f"{decision_type} • {reason} • {ts}"))
+        if not decision_event_rows:
+            decision_event_rows = [html.Li("No recent decisions available.")]
+
+        event_log_panel = html.Div(
+            [
+                html.Div("Decision Event Log", className="section-label"),
+                html.Ul(decision_event_rows, className="analysis-list"),
+            ],
+            id="event-log-panel",
+            className="panel",
+        )
+
         operational_panel = html.Div(
             [
                 html.Div("Operational Overview", className="section-label"),
@@ -501,7 +764,12 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
                 html.Div(
                     [
                         signal_panel,
-                        operational_panel
+                        operational_panel,
+                        runtime_panel,
+                        broker_panel,
+                        constraints_panel,
+                        event_log_panel,
+                        mt5_diagnostics_panel,
                     ],
                     className="overview-bottom-grid",
                 ),

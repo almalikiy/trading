@@ -43,7 +43,27 @@ def build_layout() -> html.Div:  # Build the main layout of the Dash app
                             id="status-summary-panel",
                             className="panel",
                             children="System Status",
-                        )
+                        ),
+                        html.Div(
+                            id="auto-trade-runtime-panel",
+                            className="panel",
+                            children="Auto-Trade Runtime",
+                        ),
+                        html.Div(
+                            id="broker-management-panel",
+                            className="panel",
+                            children="Broker Management",
+                        ),
+                        html.Div(
+                            id="auto-trade-constraints-panel",
+                            className="panel",
+                            children="Auto-Trade Constraints",
+                        ),
+                        html.Div(
+                            id="mt5-diagnostics-panel",
+                            className="panel",
+                            children="MT5 Diagnostics",
+                        ),
                     ]),
                 ],
                 id="app-content", #

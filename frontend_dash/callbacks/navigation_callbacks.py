@@ -132,3 +132,15 @@ def register_navigation_callbacks(app: Dash) -> None:
             return label, detail
         except Exception as exc:
             return "Confirm MT5 Operational Check", f"MT5 Operational Check: failed • {exc}"
+
+    @app.callback(
+        Output("mt5-diagnostics-panel-status", "children"),
+        Input("clear-mt5-log-button", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def clear_mt5_error_log(_n_clicks: int | None):
+        try:
+            api_post("/mt5/error_log/clear")
+            return "MT5 error log cleared."
+        except Exception as exc:
+            return f"Failed to clear MT5 error log: {exc}"

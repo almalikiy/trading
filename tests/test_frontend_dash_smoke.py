@@ -37,6 +37,10 @@ def test_dash_layout_contains_core_nodes() -> None:
     assert "stream-status-badge" in ids
     assert "toolbar-stream-status" in ids
     assert "status-summary-panel" in ids
+    assert "auto-trade-runtime-panel" in ids
+    assert "broker-management-panel" in ids
+    assert "auto-trade-constraints-panel" in ids
+    assert "mt5-diagnostics-panel" in ids
 
 
 def test_dash_callbacks_registered() -> None:
@@ -78,6 +82,20 @@ def test_overview_page_includes_real_chart_component() -> None:
 
     walk(page)
     assert found is True
+
+
+def test_settings_page_includes_account_controls() -> None:
+    from frontend_dash.pages.settings import render_settings_page
+
+    page = render_settings_page()
+    ids: set[str] = set()
+    _collect_ids(page, ids)
+
+    assert "account-controls-panel" in ids
+    assert "risk-config-panel" in ids
+    assert "broker-crud-panel" in ids
+    assert "sync-settings-panel" in ids
+    assert "ml-export-panel" in ids
 
 
 def test_overview_page_counts_nested_positions_payload(monkeypatch) -> None:
