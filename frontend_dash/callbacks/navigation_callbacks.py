@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from dash import Dash, Input, Output, State, callback_context
+from dash import ALL, Dash, Input, Output, State, callback_context
 
-from frontend_dash.api.client import api_get, api_post, as_mapping
+from frontend_dash.api.client import api_delete, api_get, api_post, api_put, as_mapping
 from frontend_dash.pages import render_overview_page, render_settings_page, render_strategy_page, render_transactions_page
 
 
@@ -81,7 +81,8 @@ def register_navigation_callbacks(app: Dash) -> None:
             keep_alive = as_mapping(api_get("/account/keep_mt5_alive_status"))
             enabled = bool(keep_alive.get("enabled", False))
             signal = as_mapping(api_get("/signal", {"symbol": symbol or "XAUUSD", "mode": "real"}))
-            stream_ok = not enabled or bool(signal.get("status") not in {"degraded", "error"})
+            signal_status = str(signal.get("status") or "degraded").lower()
+            stream_ok = signal_status not in {"degraded", "error", "unavailable"}
             badge_label = "LIVE" if stream_ok else "DEGRADED"
             badge_class = "status-dot pill-sync-running" if stream_ok else "status-dot pill-sync-queued"
             notice = str(signal.get("notice") or ("MT5 Keep Alive is on." if enabled else "MT5 Keep Alive is off. Stream is using cached/non-terminal data only."))
@@ -173,6 +174,37 @@ def register_navigation_callbacks(app: Dash) -> None:
                 api_delete(f"/brokers/{broker_id}")
                 return f"Broker {broker_id} deleted."
             return "No broker action triggered."
+        except Exception as exc:
+            return f"Broker action failed: {exc}"
+
+    @app.callback(
+        Output("broker-action-status", "children"),
+        Input({"type": "broker-launch-button", "index": ALL}, "n_clicks"),
+        Input({"type": "broker-sync-button", "index": ALL}, "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def handle_broker_row_action(launch_clicks: list[int] | None, sync_clicks: list[int] | None):
+        try:
+            trigger = callback_context.triggered_id if callback_context.triggered_id else None
+            if not isinstance(trigger, dict):
+                return "No broker row action triggered."
+            broker_id = trigger.get("index")
+            action_name = trigger.get("type")
+            if action_name == "broker-launch-button":
+                result = api_post(f"/brokers/{broker_id}/launch_terminal")
+                payload = as_mapping(result)
+                started = bool(payload.get("started", False))
+                if started:
+                    return f"Broker {broker_id}: terminal launch started successfully."
+                return f"Broker {broker_id}: terminal launch failed. {payload.get('message') or 'unknown error'}"
+            if action_name == "broker-sync-button":
+                result = api_post(f"/brokers/{broker_id}/sync", {"history_days": 90})
+                payload = as_mapping(result)
+                sync_result = as_mapping(payload.get("result"))
+                if bool(sync_result.get("synced")):
+                    return f"Broker {broker_id}: sync completed successfully."
+                return f"Broker {broker_id}: sync status {payload.get('status', 'error')} • {sync_result.get('reason') or 'unknown reason'}"
+            return "No broker row action triggered."
         except Exception as exc:
             return f"Broker action failed: {exc}"
 

@@ -155,3 +155,48 @@ def test_overview_page_counts_nested_positions_payload(monkeypatch) -> None:
     texts = walk(page)
     assert "Open Positions" in texts
     assert "1" in texts
+
+
+def test_overview_page_marks_manual_terminal_as_open(monkeypatch) -> None:
+    import frontend_dash.pages.overview as overview
+
+    async def fake_api_get(path: str, params: dict[str, Any] | None = None, timeout: float = 15):
+        mapping = {
+            "/dashboard/summary": {"status": "ready", "brokers": [], "trade_sync": {"status": "idle"}, "account": {"balance": 1000.0, "equity": 1000.0}, "trading": {"open_positions": 0}},
+            "/account/state": {"balance": 1000.0, "equity": 1000.0},
+            "/positions": [],
+            "/signal": {"signal": "wait", "indicators": {"last": 2350.0, "bid": 2349.0, "ask": 2351.0, "source": "market-data"}, "status": "degraded", "notice": "ok"},
+            "/ohlcv": [{"time": 1710000000, "open": 2340.0, "high": 2355.0, "low": 2338.0, "close": 2350.0}],
+            "/brokers/default": {"name": "MT5 Demo"},
+            "/mt5/status": {"connected": False, "terminal_process_running": True, "manual_terminal_detected": True},
+            "/mt5/background_sync_status": {"sync_status": "idle"},
+            "/account/auto_trade_health": {"auto_trade_enabled": False, "checks": []},
+            "/account/auto_trade_runtime": {},
+            "/brokers": [],
+            "/account/auto_trade_constraints": {"constraints": {}},
+            "/account/auto_trade_stats": {"stats": {}},
+            "/account/auto_trade_events": {"events": []},
+            "/mt5/error_log": {"errors": []},
+            "/mt5/error_log_summary": {"errors": []},
+        }
+        return mapping.get(path, {})
+
+    monkeypatch.setattr(overview, "api_get_async", fake_api_get)
+
+    page = overview.render_overview_page("XAUUSD", "M1", 10)
+
+    def walk(node: Any, text_values: list[str] | None = None):
+        if text_values is None:
+            text_values = []
+        children = getattr(node, "children", None)
+        if isinstance(children, list):
+            for item in children:
+                walk(item, text_values)
+        elif children is not None:
+            walk(children, text_values)
+        if isinstance(node, str):
+            text_values.append(node)
+        return text_values
+
+    texts = walk(page)
+    assert "Open" in texts or "Manual" in texts

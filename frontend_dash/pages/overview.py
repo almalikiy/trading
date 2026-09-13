@@ -67,6 +67,26 @@ def _safe_int(value: Any, default: int) -> int:
         return default
 
 
+def _resolve_mt5_terminal_state(mt5_status_data: dict[str, Any]) -> tuple[bool, bool, bool, str]:
+    connected = bool(mt5_status_data.get("connected", False) or mt5_status_data.get("ready", False))
+    process_running = bool(
+        mt5_status_data.get("terminal_process_running")
+        or mt5_status_data.get("process_running")
+        or mt5_status_data.get("manual_terminal_detected")
+        or mt5_status_data.get("terminal_open")
+    )
+    manual_terminal = bool(
+        mt5_status_data.get("manual_terminal_detected")
+        or mt5_status_data.get("manual_open")
+        or mt5_status_data.get("terminal_open")
+    )
+    if connected:
+        return connected, process_running, manual_terminal, "connected"
+    if process_running or manual_terminal:
+        return connected, process_running, manual_terminal, "open"
+    return connected, process_running, manual_terminal, "offline"
+
+
 def _resolve_default_broker_record(rows: list[Any]) -> dict[str, Any]:
     if not rows:
         return {}
@@ -331,7 +351,8 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
         ]
 
         broker_summary = summary_data.get("brokers", []) if isinstance(summary_data.get("brokers", []), list) else []
-        mt5_connected = bool(mt5_status_data.get("connected", False) or mt5_status_data.get("ready", False))
+        mt5_connected, mt5_process_running, mt5_manual_terminal, mt5_terminal_state = _resolve_mt5_terminal_state(mt5_status_data)
+        mt5_state_label = {"connected": "Connected", "open": "Open", "offline": "Offline"}.get(mt5_terminal_state, "Offline")
         background_sync_state = str(background_sync_data.get("sync_status", background_sync_data.get("status", "idle")) or "idle").lower()
         sync_status_label = background_sync_state.upper() if background_sync_state else "IDLE"
 
@@ -352,8 +373,10 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
 
         stream_mode = str(signal_data.get("status", "degraded")).lower()
         stream_notice = str(signal_data.get("notice") or "Stream running in safe mode.")
-        if not signal_data.get("notice") and not mt5_connected:
+        if not signal_data.get("notice") and mt5_terminal_state == "offline":
             stream_notice = "MT5 Keep Alive is off. Stream is using cached/non-terminal data only."
+        elif not signal_data.get("notice") and mt5_terminal_state == "open":
+            stream_notice = "MT5 terminal is already open manually. Backend adapter connectivity is separate from the terminal process status."
         degraded_banner = html.Div(
             [
                 html.Div("Stream Status", className="subsection-label"),
@@ -380,7 +403,7 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
                                 html.Div(
                                     [
                                         html.Div("Terminal", className="summary-label"),
-                                        html.Div("Connected" if mt5_connected else "Offline", className="summary-value"),
+                                        html.Div(mt5_state_label, className="summary-value"),
                                     ],
                                     className="summary-item",
                                 ),
@@ -712,7 +735,7 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
                         html.Div(
                             [
                                 html.Span("MT5 ", className="status-dot pill-mt5-on" if mt5_connected else "status-dot pill-mt5-off"),
-                                html.Span("Connected" if mt5_connected else "Offline"),
+                                html.Span(mt5_state_label),
                             ],
                             className="status-pill",
                         ),

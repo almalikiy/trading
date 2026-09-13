@@ -277,18 +277,56 @@ def render_settings_page():
             style_cell={"padding": "8px"},
         )
 
+        broker_action_panel = html.Div(
+            [
+                html.Div("Broker Actions", className="section-label"),
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.Div(f"{as_mapping(item).get('name', '-')} • {as_mapping(item).get('platform', '-')} ", className="kv-line"),
+                                html.Div(
+                                    [
+                                        html.Button(
+                                            "Launch MT5 Terminal",
+                                            id={"type": "broker-launch-button", "index": int(as_mapping(item).get("id", -1))},
+                                            className="action-button neutral",
+                                            n_clicks=0,
+                                        ),
+                                        html.Button(
+                                            "Sync Account / Transactions",
+                                            id={"type": "broker-sync-button", "index": int(as_mapping(item).get("id", -1))},
+                                            className="action-button buy",
+                                            n_clicks=0,
+                                        ),
+                                    ],
+                                    className="action-row",
+                                ),
+                            ],
+                            className="compact-panel",
+                        )
+                        for item in rows[:20]
+                        if as_mapping(item).get("id") is not None
+                    ],
+                    className="settings-grid",
+                ),
+            ],
+            className="panel",
+        )
+
         return html.Div([
             html.Div("Settings", className="section-label"),
             html.Div(settings_cards, className="settings-grid"),
             account_controls_panel,
             risk_config_panel,
-            broker_crud_panel,
             sync_settings_panel,
             ml_export_panel,
+            broker_crud_panel,
             html.Div(
                 [
                     html.Div("Broker List", className="section-label"),
                     html.Div(brokers_table, className="table-dark"),
+                    broker_action_panel,
                 ],
                 className="panel",
             ),

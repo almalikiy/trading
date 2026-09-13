@@ -29,8 +29,16 @@ async def get_signal(symbol: str = "XAUUSD", mode: str = "real") -> dict[str, ob
         except (TypeError, ValueError):
             return float(default)
 
+    status = str(snapshot.get("status") or ("ok" if snapshot.get("connected") else "degraded")).lower()
+    signal_status = "wait"
+    if status == "ok":
+        signal_status = "wait"
+
     return {
-        "signal": "wait",
+        "signal": signal_status,
+        "status": status,
+        "connected": bool(snapshot.get("connected", False)),
+        "ready": bool(snapshot.get("connected", False)),
         "indicators": {
             "source": snapshot.get("source", "market-data"),
             "last": as_float(snapshot.get("last"), 0.0),
@@ -43,6 +51,7 @@ async def get_signal(symbol: str = "XAUUSD", mode: str = "real") -> dict[str, ob
         "symbol": symbol,
         "mode": mode,
         "timestamp": datetime.utcnow().isoformat(),
+        "notice": snapshot.get("reason") or ("MT5 market feed connected." if status == "ok" else "MT5 market feed degraded. Using fallback data."),
     }
 
 

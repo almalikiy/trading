@@ -453,7 +453,14 @@ async def set_auto_trade_config_route(payload: AutoTradeConfigRequest) -> dict[s
         if cleaned:
             state["auto_trade_timeframes"] = ",".join(cleaned)
 
-    state["auto_trade_symbol"] = _resolve_symbol_for_state(state, broker=broker_ctx)
+    if payload.symbol is not None:
+        normalized_symbol = str(payload.symbol).strip().upper() or None
+        if normalized_symbol:
+            state["auto_trade_symbol"] = normalized_symbol
+        else:
+            state["auto_trade_symbol"] = _resolve_symbol_for_state(state, broker=broker_ctx)
+    else:
+        state["auto_trade_symbol"] = _resolve_symbol_for_state(state, broker=broker_ctx)
     save_account_state(state)
     if broker_ctx and account_id_ctx is not None:
         db.save_auto_trade_profile(broker_ctx.get("id"), account_id_ctx, state)

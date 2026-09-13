@@ -1,6 +1,7 @@
 #file: trading_bot/adapters/market_data/mt5_market_data.py
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Any
 
@@ -48,15 +49,34 @@ class MT5MarketDataAdapter(BaseMarketDataAdapter):
 
     def _resolve_default_mt5_path(self) -> str | None:
         try:
+            from trading_bot.app import db
             from trading_bot.app import terminal_adapters as terminal_adapters
+            from trading_bot.app.terminal_runtime import _normalize_terminal_path_value
         except Exception:
             return None
+
         try:
-            if not terminal_adapters._is_keep_terminal_alive_enabled():
-                return None
-            return terminal_adapters._require_default_mt5_terminal_permission()
+            broker = db.get_default_broker() or {}
+            terminal_path = broker.get("terminal_path")
+            normalized = _normalize_terminal_path_value(terminal_path)
+            if normalized and os.path.exists(normalized):
+                return normalized
         except Exception:
-            return None
+            pass
+
+        try:
+            if terminal_adapters._is_keep_terminal_alive_enabled():
+                return terminal_adapters._require_default_mt5_terminal_permission()
+        except Exception:
+            pass
+
+        try:
+            default_path = terminal_adapters._default_broker_terminal_path()
+            if default_path:
+                return default_path
+        except Exception:
+            pass
+        return None
 
     def _degraded_snapshot(self, symbol: str) -> dict[str, Any]:
         normalized = self._normalize_symbol(symbol)

@@ -8,7 +8,7 @@ import requests
 from frontend_dash.config import BACKEND_URL
 
 
-def api_get(path: str, params: dict[str, Any] | None = None, timeout: float = 2) -> Any:
+def api_get(path: str, params: dict[str, Any] | None = None, timeout: float = 15) -> Any:
     url = f"{BACKEND_URL.rstrip('/')}{path}"
     response = requests.get(url, params=params or {}, timeout=timeout)
     if response.status_code >= 400:
@@ -22,7 +22,7 @@ def api_get(path: str, params: dict[str, Any] | None = None, timeout: float = 2)
         return response.text
 
 
-async def api_get_async(path: str, params: dict[str, Any] | None = None, timeout: float = 2) -> Any:
+async def api_get_async(path: str, params: dict[str, Any] | None = None, timeout: float = 15) -> Any:
     return await asyncio.to_thread(api_get, path, params=params, timeout=timeout)
 
 

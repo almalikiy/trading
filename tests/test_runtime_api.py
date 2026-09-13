@@ -101,12 +101,34 @@ def test_default_broker_route_uses_real_db_default(monkeypatch):
     assert response.json()["default_symbol"] == "XAUUSD"
 
 
+def test_broker_launch_and_sync_routes_exist_for_selected_broker():
+    from trading_bot.app import db
+
+    broker = db.create_broker({
+        "name": f"Action Test Broker {int(time.time() * 1000)}",
+        "platform": "mt5",
+        "default_symbol": "XAUUSD",
+        "terminal_path": "C:/MT5/terminal64.exe",
+        "is_active": True,
+    })
+    client = TestClient(app)
+
+    launch = client.post(f"/brokers/{broker['id']}/launch_terminal")
+    assert launch.status_code == 200
+    assert launch.json()["status"] in {"ok", "error"}
+
+    sync = client.post(f"/brokers/{broker['id']}/sync")
+    assert sync.status_code == 200
+    assert "synced" in sync.json() or "status" in sync.json()
+
+
 def test_signal_endpoint_exists_and_returns_payload():
     client = TestClient(app)
     response = client.get("/signal?symbol=XAUUSD&mode=real")
     assert response.status_code == 200
     payload = response.json()
     assert "signal" in payload
+    assert payload["status"] in {"ok", "degraded", "error", "unavailable"}
 
 
 def test_ohlcv_endpoint_exists_and_returns_array():
@@ -181,6 +203,22 @@ def test_legacy_auto_trade_state_tracks_persisted_db_value():
     assert refreshed.status_code == 200
     assert refreshed.json()["auto_trade_enabled"] is True
     assert refreshed.json()["active"] is True
+
+
+def test_set_auto_trade_config_respects_manual_symbol_override():
+    from trading_bot.app.db import get_account_state, save_account_state
+
+    client = TestClient(app)
+    state = get_account_state()
+    state["auto_trade_symbol"] = "XAUUSD"
+    save_account_state(state)
+
+    response = client.post("/account/set_auto_trade_config", json={"symbol": "GBPUSD"})
+    assert response.status_code == 200
+    assert response.json()["auto_trade_symbol"] == "GBPUSD"
+
+    refreshed = get_account_state()
+    assert refreshed["auto_trade_symbol"] == "GBPUSD"
 
 
 def test_legacy_frontend_routes_are_compatible():

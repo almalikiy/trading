@@ -79,19 +79,65 @@ def test_init_db_adds_default_symbol_column(tmp_path):
         assert row[0] == "XAUUSD"
 
 
-def test_get_db_blocks_default_sqlite_when_postgres_is_active():
-    db.DB_PATH = db.DEFAULT_DB_PATH
+def test_get_db_uses_postgres_runtime_when_postgres_backend_is_active(monkeypatch):
+    class FakePostgresRuntimeConnection:
+        def __init__(self, dsn):
+            self.dsn = dsn
+            self.closed = False
 
-    with pytest.raises(RuntimeError, match="SQLite read path is disabled"):
-        with db.get_db():
-            pass
+        def execute(self, sql, params=None):
+            return self
 
-    db.DB_PATH = str(Path(__file__).resolve().parent / "tmp_sqlite_test.db")
-    try:
-        with db.get_db() as conn:
-            assert conn is not None
-    finally:
-        db.DB_PATH = db.DEFAULT_DB_PATH
+        def fetchone(self):
+            return None
+
+        def fetchall(self):
+            return []
+
+        def commit(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+
+    monkeypatch.setattr(db, "get_settings", lambda: type("Settings", (), {"database_backend": "postgresql", "legacy_sqlite_compat_mode": False})())
+    monkeypatch.setattr(db, "build_postgres_dsn", lambda settings: "postgresql://fake")
+    monkeypatch.setattr(db, "PostgresRuntimeConnection", FakePostgresRuntimeConnection)
+
+    with db.get_db() as conn:
+        assert isinstance(conn, FakePostgresRuntimeConnection)
+        assert conn.dsn == "postgresql://fake"
+
+
+def test_delete_broker_reassigns_default_and_clears_feed_selection(tmp_path):
+    db.DB_PATH = str(tmp_path / "test.db")
+    db.init_db()
+
+    first = db.create_broker({"name": "Primary Broker", "platform": "mt5", "default_symbol": "XAUUSD"})
+    second = db.create_broker({"name": "Secondary Broker", "platform": "mt5", "default_symbol": "EURUSD"})
+    db.set_default_broker(first["id"])
+
+    state = db.get_account_state()
+    state["data_feed_broker_id"] = first["id"]
+    db.save_account_state(state)
+
+    assert db.delete_broker(first["id"]) is True
+    assert db.get_broker(first["id"]) is None
+
+    default_broker = db.get_default_broker()
+    assert default_broker is not None
+    assert default_broker["id"] != first["id"]
+    assert default_broker["id"] in {row["id"] for row in db.list_brokers(include_inactive=True) if row["id"] != first["id"]}
+    assert db.get_account_state()["data_feed_broker_id"] == default_broker["id"]
+
+    assert db.delete_broker(default_broker["id"]) is True
+    assert db.get_account_state()["data_feed_broker_id"] in {None, second["id"]}
 
 
 def test_legacy_json_migration_requires_explicit_opt_in(monkeypatch, tmp_path):
