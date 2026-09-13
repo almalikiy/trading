@@ -1,4 +1,10 @@
-import sqlite3, os
+import os
+
+if not os.environ.get("ALLOW_SQLITE_SCAN"):
+    raise SystemExit("Legacy SQLite scanning is disabled by default. Set ALLOW_SQLITE_SCAN=1 only for one-off diagnostics.")
+
+import sqlite3
+
 root = r'D:\development\trading'
 for db in ['account_state.db', 'trading_data.db']:
     p = os.path.join(root, db)

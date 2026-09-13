@@ -67,6 +67,16 @@ def _safe_int(value: Any, default: int) -> int:
         return default
 
 
+def _resolve_default_broker_record(rows: list[Any]) -> dict[str, Any]:
+    if not rows:
+        return {}
+    for row in rows:
+        payload = as_mapping(row)
+        if bool(payload.get("is_default")):
+            return payload
+    return as_mapping(rows[0])
+
+
 def _compute_signal_insight(candles: list[dict[str, Any]], signal_status: str, last_price: float) -> tuple[str, list[str], dict[str, float]]:
     if not candles:
         return (
@@ -218,34 +228,55 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
     bars = _safe_int(bars, DEFAULT_BARS)
 
     async def _load_data() -> html.Div:
-        summary, account, positions, signal, candles, default_broker, mt5_status, background_sync, auto_trade_health, auto_trade_runtime, brokers, auto_trade_constraints, auto_trade_stats, auto_trade_events, mt5_error_log, mt5_error_log_summary = await asyncio.gather(
-            _safe_api_get("/dashboard/summary"),
-            _safe_api_get("/account/state"),
-            _safe_api_get("/positions"),
-            _safe_api_get("/signal", {"symbol": symbol, "mode": "real"}),
-            _safe_api_get("/ohlcv", {"symbol": symbol, "timeframe": timeframe, "bars": bars}),
-            _safe_api_get("/brokers/default"),
-            _safe_api_get("/mt5/status"),
-            _safe_api_get("/mt5/background_sync_status"),
-            _safe_api_get("/account/auto_trade_health"),
-            _safe_api_get("/account/auto_trade_runtime"),
-            _safe_api_get("/brokers", {"include_inactive": "true"}),
-            _safe_api_get("/account/auto_trade_constraints"),
-            _safe_api_get("/account/auto_trade_stats", {"window_days": 30}),
-            _safe_api_get("/account/auto_trade_events", {"limit": 10}),
-            _safe_api_get("/mt5/error_log", {"limit": 8}),
-            _safe_api_get("/mt5/error_log_summary", {"limit": 200}),
-        )
+        try:
+            summary, account, positions, signal, candles, default_broker, mt5_status, background_sync, auto_trade_health, auto_trade_runtime, brokers, auto_trade_constraints, auto_trade_stats, auto_trade_events, mt5_error_log, mt5_error_log_summary = await asyncio.gather(
+                _safe_api_get("/dashboard/summary"),
+                _safe_api_get("/account/state"),
+                _safe_api_get("/positions"),
+                _safe_api_get("/signal", {"symbol": symbol, "mode": "real"}),
+                _safe_api_get("/ohlcv", {"symbol": symbol, "timeframe": timeframe, "bars": bars}),
+                _safe_api_get("/brokers/default"),
+                _safe_api_get("/mt5/status"),
+                _safe_api_get("/mt5/background_sync_status"),
+                _safe_api_get("/account/auto_trade_health"),
+                _safe_api_get("/account/auto_trade_runtime"),
+                _safe_api_get("/brokers", {"include_inactive": "true"}),
+                _safe_api_get("/account/auto_trade_constraints"),
+                _safe_api_get("/account/auto_trade_stats", {"window_days": 30}),
+                _safe_api_get("/account/auto_trade_events", {"limit": 10}),
+                _safe_api_get("/mt5/error_log", {"limit": 8}),
+                _safe_api_get("/mt5/error_log_summary", {"limit": 200}),
+            )
+        except Exception:
+            summary = {"brokers": []}
+            account = {"balance": 0.0, "equity": 0.0, "auto_trade_enabled": False, "enable_real_trade": False}
+            positions = []
+            signal = {"signal": "wait", "indicators": {"last": 0.0, "source": "market-data"}, "status": "degraded", "notice": "Backend unavailable; showing offline fallback."}
+            candles = []
+            default_broker = {}
+            mt5_status = {"connected": False}
+            background_sync = {"sync_status": "idle"}
+            auto_trade_health = {"auto_trade_enabled": False, "checks": []}
+            auto_trade_runtime = {}
+            brokers = []
+            auto_trade_constraints = {"constraints": {}}
+            auto_trade_stats = {"stats": {}}
+            auto_trade_events = {"events": []}
+            mt5_error_log = {"errors": []}
+            mt5_error_log_summary = {"errors": []}
 
         signal_data = as_mapping(signal)
         account_data = as_mapping(account)
         summary_data = as_mapping(summary)
+        summary_broker_rows = summary_data.get("brokers") if isinstance(summary_data.get("brokers"), list) else []
+        broker_rows = brokers if isinstance(brokers, list) and brokers else summary_broker_rows
         default_broker_data = as_mapping(default_broker)
+        if not default_broker_data:
+            default_broker_data = _resolve_default_broker_record(broker_rows)
         mt5_status_data = as_mapping(mt5_status)
         background_sync_data = as_mapping(background_sync)
         auto_trade_health_map = as_mapping(auto_trade_health)
         auto_trade_runtime_map = as_mapping(auto_trade_runtime)
-        broker_rows = brokers if isinstance(brokers, list) else []
         constraints_map = as_mapping(auto_trade_constraints.get("constraints") if isinstance(auto_trade_constraints, dict) else auto_trade_constraints)
         stats_map = as_mapping(auto_trade_stats.get("stats") if isinstance(auto_trade_stats, dict) else auto_trade_stats)
         events_payload = as_mapping(auto_trade_events)
@@ -518,7 +549,7 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
 
         broker_panel = html.Div(
             [
-                html.Div("Broker Management", className="section-label"),
+                html.Div("Broker Snapshot", className="section-label"),
                 html.Div(
                     [
                         html.Div(f"Default Broker: {default_broker_data.get('name', '-') if default_broker_data else '-'}", className="kv-line"),
@@ -529,23 +560,8 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
                 ),
                 html.Div(broker_items, className="broker-panel-list"),
                 html.Div(
-                    [
-                        html.Label("Set default broker", className="field-label"),
-                        dcc.Dropdown(
-                            id="broker-selector",
-                            options=[
-                                {"label": as_mapping(item).get("name", "Broker"), "value": str(as_mapping(item).get("id", ""))}
-                                for item in broker_rows
-                                if as_mapping(item).get("id") is not None
-                            ],
-                            value=(str((default_broker_data or {}).get("id", "")) if default_broker_data and default_broker_data.get("id") is not None else None),
-                            clearable=False,
-                            searchable=False,
-                            className="strategy-parameter-input",
-                        ),
-                        html.Button("Apply Default Broker", id="set-default-broker-button", className="action-button neutral", n_clicks=0),
-                    ],
-                    className="broker-panel-actions",
+                    "Managed centrally in Settings > Broker CRUD.",
+                    className="kv-line",
                 ),
             ],
             id="broker-management-panel",
@@ -640,6 +656,7 @@ def render_overview_page(symbol: str | None, timeframe: str | None, bars: Any):
         mt5_diagnostics_panel = html.Div(
             [
                 html.Div("MT5 Diagnostics", className="section-label"),
+                html.Div("Read-only overview for terminal health; operational controls live in the top toolbar and Settings.", className="kv-line"),
                 html.Div(mt5_error_card_items, className="metrics-grid"),
                 html.Div(
                     [

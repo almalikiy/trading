@@ -29,6 +29,14 @@ except Exception:  # pragma: no cover
 DEFAULT_DB_PATH = ROOT / "trading_data.db"
 
 
+def should_allow_sqlite_access(db_path: str | Path, *, allow_sqlite: bool = False) -> bool:
+    if allow_sqlite:
+        return True
+    candidate = Path(db_path).resolve()
+    default_path = DEFAULT_DB_PATH.resolve()
+    return candidate != default_path
+
+
 def normalize_symbol(value: Any) -> str:
     return str(value or "").strip().upper().replace("~", "")
 
@@ -252,9 +260,17 @@ def main() -> int:
     parser.add_argument("--symbol", default=None, help="Filter to a specific symbol")
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of a human-readable table")
     parser.add_argument("--no-apply", action="store_true", help="Only report stale rows without updating the database")
+    parser.add_argument("--allow-sqlite", action="store_true", help="Explicitly allow legacy SQLite access for migration and troubleshooting only")
     args = parser.parse_args()
 
     db_path = Path(args.db)
+    if not should_allow_sqlite_access(db_path, allow_sqlite=args.allow_sqlite):
+        print(
+            "SQLite legacy access is disabled by default because the project is PostgreSQL-first. "
+            "Re-run with --allow-sqlite only for migration or debugging.",
+            file=sys.stderr,
+        )
+        return 2
     if not db_path.exists():
         print(f"ERROR: DB file not found: {db_path}")
         return 2

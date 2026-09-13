@@ -1,11 +1,15 @@
 import json
 import os
+import re
 import sqlite3
 import time
 import warnings
 from contextlib import contextmanager
 
+import psycopg
+
 from trading_bot.infrastructure.config.settings import get_settings
+from trading_bot.infrastructure.database.postgres_bootstrap import build_postgres_dsn
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "trading_data.db")
@@ -95,10 +99,135 @@ AUTO_TRADE_RISK_POLICY_DEFAULTS = {
 }
 
 
+class PostgresRuntimeConnection:
+    _BOOLEAN_TOKEN_RE = re.compile(
+        r"(?P<column>\b(?:is_default|is_active|enable_real_trade|auto_trade_enabled|keep_terminal_alive|auto_analytic_tpsl|" \
+        r"auto_trade_use_account_balance|auto_trade_use_available_margin|auto_trade_allow_sell|auto_trade_use_atr_tpsl|" \
+        r"auto_trade_trailing_enabled|auto_trade_partial_tp_enabled|auto_trade_break_even_enabled|trade_history_sync_all|" \
+        r"auto_trade_protective_mode|auto_trade_risk_mode|auto_trade_risk_selector_strategy|auto_trade_stateful_trail_buffer_atr_mult|" \
+        r"auto_trade_confidence_model|auto_trade_timeframes|auto_trade_trailing_mode)\b)\s*=\s*(?P<value>0|1)\b",
+        flags=re.IGNORECASE,
+    )
+
+    def __init__(self, dsn: str):
+        self._conn = psycopg.connect(dsn)
+        self._cursor = None
+        self.row_factory = None
+
+    def execute(self, sql, params=None):
+        normalized_sql = self._normalize_sql(sql)
+        normalized_params = self._normalize_params(normalized_sql, params)
+        self._cursor = self._conn.cursor()
+        self._cursor.execute(normalized_sql, normalized_params)
+        return self
+
+    def _normalize_sql(self, sql):
+        if not isinstance(sql, str):
+            return sql
+        sql = re.sub(r"\?", "%s", sql)
+        sql = self._BOOLEAN_TOKEN_RE.sub(self._rewrite_bool_literal, sql)
+        return sql
+
+    @staticmethod
+    def _rewrite_bool_literal(match: re.Match[str]) -> str:
+        column = match.group("column")
+        value = match.group("value")
+        target = "TRUE" if value == "1" else "FALSE"
+        return f"{column} = {target}"
+
+    def _normalize_params(self, sql: str, params):
+        if params is None:
+            return ()
+        if not isinstance(params, tuple):
+            params = tuple(params)
+        if not params:
+            return ()
+        converted = []
+        for param in params:
+            if isinstance(param, int) and param in (0, 1) and self._sql_uses_boolean_columns(sql):
+                converted.append(bool(param))
+            else:
+                converted.append(param)
+        return tuple(converted)
+
+    @staticmethod
+    def _sql_uses_boolean_columns(sql: str) -> bool:
+        lowered = sql.lower()
+        return any(token in lowered for token in (
+            "is_default",
+            "is_active",
+            "enable_real_trade",
+            "auto_trade_enabled",
+            "keep_terminal_alive",
+            "auto_analytic_tpsl",
+            "auto_trade_use_account_balance",
+            "auto_trade_use_available_margin",
+            "auto_trade_allow_sell",
+            "auto_trade_use_atr_tpsl",
+            "auto_trade_trailing_enabled",
+            "auto_trade_partial_tp_enabled",
+            "auto_trade_break_even_enabled",
+            "trade_history_sync_all",
+            "auto_trade_enabled",
+            "auto_trade_confidence_model",
+            "keep_terminal_alive",
+            "auto_trade_reversal_confirm_cycles",
+        ))
+
+    def fetchone(self):
+        if self._cursor is None:
+            return None
+        row = self._cursor.fetchone()
+        if row is None:
+            return None
+        if self._cursor.description is None:
+            return row
+        return dict(zip((col.name for col in self._cursor.description), row))
+
+    def fetchall(self):
+        if self._cursor is None:
+            return []
+        rows = self._cursor.fetchall()
+        if not rows:
+            return []
+        if self._cursor.description is None:
+            return rows
+        return [dict(zip((col.name for col in self._cursor.description), row)) for row in rows]
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            if exc_type is None:
+                self.commit()
+        finally:
+            self.close()
+
+
 @contextmanager
 def get_db():
     settings = get_settings()
-    if settings.database_backend == "postgresql" and settings.legacy_sqlite_compat_mode:
+    default_db_path = os.path.abspath(DEFAULT_DB_PATH)
+    current_db_path = os.path.abspath(DB_PATH)
+    is_default_runtime_db = current_db_path == default_db_path
+
+    if settings.database_backend == "postgresql" and not settings.legacy_sqlite_compat_mode and is_default_runtime_db:
+        conn = PostgresRuntimeConnection(build_postgres_dsn(settings))
+        try:
+            yield conn
+        finally:
+            conn.commit()
+            conn.close()
+        return
+
+    if settings.database_backend == "postgresql" and settings.legacy_sqlite_compat_mode and is_default_runtime_db:
         warnings.warn(
             "Legacy SQLite compatibility mode is enabled for migration support only. PostgreSQL is the active backend.",
             DeprecationWarning,
@@ -653,10 +782,18 @@ def init_db():
             if first:
                 conn.execute("UPDATE brokers SET is_default = 1 WHERE id = ?", (first["id"],))
 
-    migrate_legacy_json_to_db()
+    if _legacy_json_migration_enabled() and os.path.abspath(os.path.normpath(DB_PATH)) == os.path.abspath(os.path.normpath(DEFAULT_DB_PATH)):
+        migrate_legacy_json_to_db()
+
+
+def _legacy_json_migration_enabled() -> bool:
+    return os.environ.get("ALLOW_LEGACY_JSON_MIGRATION", "0").lower() in {"1", "true", "yes", "on"}
 
 
 def migrate_legacy_json_to_db():
+    if not _legacy_json_migration_enabled():
+        raise RuntimeError("legacy JSON migration is disabled by default. Set ALLOW_LEGACY_JSON_MIGRATION=1 only for explicit migration support.")
+
     if os.path.abspath(os.path.normpath(DB_PATH)) != os.path.abspath(os.path.normpath(DEFAULT_DB_PATH)):
         return
 
@@ -747,7 +884,56 @@ def migrate_legacy_json_to_db():
             pass
 
 
+def ensure_default_account_state():
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM account_state WHERE id = 1 LIMIT 1").fetchone()
+        if row is not None:
+            return True
+        conn.execute(
+            """
+            INSERT INTO account_state (
+                id, balance, initial_balance, enable_real_trade, auto_trade_enabled,
+                keep_terminal_alive, data_feed_broker_id,
+                auto_analytic_tpsl, tp_value, sl_value, lot, max_open_trades,
+                auto_trade_symbol, auto_trade_interval_sec,
+                trade_history_sync_days, trade_history_sync_all,
+                auto_trade_risk_mode, auto_trade_risk_percent,
+                auto_trade_use_account_balance, auto_trade_use_available_margin,
+                auto_trade_min_free_margin_pct, auto_trade_max_margin_usage_pct,
+                auto_trade_max_spread_points, auto_trade_min_signal_score,
+                auto_trade_allow_sell, auto_trade_cooldown_sec,
+                auto_trade_session_start_hour, auto_trade_session_end_hour,
+                auto_trade_use_atr_tpsl, auto_trade_atr_period,
+                auto_trade_atr_sl_mult, auto_trade_atr_tp_mult,
+                auto_trade_trailing_enabled, auto_trade_trailing_activation_rr,
+                auto_trade_trailing_atr_mult, auto_trade_confidence_model,
+                auto_trade_confidence_threshold, auto_trade_timeframes,
+                auto_trade_tf_weight_m1, auto_trade_tf_weight_m5,
+                auto_trade_tf_weight_m15, auto_trade_tf_weight_m30,
+                auto_trade_partial_tp_enabled,
+                auto_trade_partial_tp_rr1, auto_trade_partial_tp_close_pct1,
+                auto_trade_partial_tp_rr2, auto_trade_partial_tp_close_pct2,
+                auto_trade_break_even_enabled,
+                auto_trade_break_even_rr, auto_trade_break_even_offset_atr_mult,
+                auto_trade_trailing_mode, auto_trade_stateful_trail_buffer_atr_mult,
+                auto_trade_protective_mode, auto_trade_min_hold_sec,
+                auto_trade_reversal_confirm_cycles
+            ) VALUES (
+                1, 1000, 1000, FALSE, FALSE, FALSE, NULL, FALSE, 0.5, NULL, 0.01, 1,
+                'XAUUSD', 2, 90, FALSE, 'fixed_lot', 1.0, TRUE, TRUE, 30.0, 70.0,
+                120, 0.55, TRUE, 30, 0, 24, TRUE, 14, 1.5, 2.5, TRUE, 1.0, 1.0,
+                'weighted', 0.6, 'M1,M5,M15,M30', 0.35, 0.30, 0.20, 0.15,
+                TRUE, 1.0, 40.0, 2.0, 35.0, TRUE, 1.0, 0.1, 'stateful_hl', 0.5,
+                'broker_sl', 15, 2
+            )
+            ON CONFLICT (id) DO NOTHING
+            """
+        )
+    return True
+
+
 def get_account_state():
+    ensure_default_account_state()
     with get_db() as conn:
         row = conn.execute(
             """
@@ -2750,9 +2936,10 @@ def list_brokers(include_inactive=False):
                 SELECT id, name, platform, terminal_path, execution_mode, window_hint,
                        default_symbol, is_default, is_active, created_at, updated_at
                 FROM brokers
-                WHERE is_active = 1
+                WHERE is_active = %s
                 ORDER BY is_default DESC, name ASC
-                """
+                """,
+                (True,),
             ).fetchall()
         return [
             {
@@ -2805,10 +2992,11 @@ def get_default_broker():
         row = conn.execute(
             """
             SELECT id FROM brokers
-            WHERE is_default = 1 AND is_active = 1
+            WHERE is_default = %s AND is_active = %s
             ORDER BY id ASC
             LIMIT 1
-            """
+            """,
+            (True, True),
         ).fetchone()
     if not row:
         brokers = list_brokers(include_inactive=False)

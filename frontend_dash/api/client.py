@@ -41,6 +41,28 @@ async def api_post_async(path: str, payload: dict[str, Any] | None = None, timeo
     return await asyncio.to_thread(api_post, path, payload=payload, timeout=timeout)
 
 
+def api_put(path: str, payload: dict[str, Any] | None = None, timeout: float = 15) -> Any:
+    url = f"{BACKEND_URL.rstrip('/')}{path}"
+    response = requests.put(url, json=payload or {}, timeout=timeout)
+    if response.status_code >= 400:
+        raise RuntimeError(f"{path} failed: {response.status_code} {response.text[:200]}")
+    try:
+        return response.json()
+    except ValueError:
+        return response.text
+
+
+def api_delete(path: str, timeout: float = 15) -> Any:
+    url = f"{BACKEND_URL.rstrip('/')}{path}"
+    response = requests.delete(url, timeout=timeout)
+    if response.status_code >= 400:
+        raise RuntimeError(f"{path} failed: {response.status_code} {response.text[:200]}")
+    try:
+        return response.json()
+    except ValueError:
+        return response.text
+
+
 def as_mapping(value: Any, default: dict[str, Any] | None = None) -> dict[str, Any]:
     if isinstance(value, dict):
         return value

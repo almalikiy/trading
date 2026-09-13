@@ -23,7 +23,7 @@ def _dash_runtime_settings() -> tuple[str, int, bool]:
     host = os.getenv("DASH_HOST", "0.0.0.0")
     port = int(os.getenv("DASH_PORT", "8050"))
     debug = os.getenv("DASH_DEBUG", "false").strip().lower() in {"1", "true", "yes", "on"}
-    use_reloader = debug and os.getenv("DASH_USE_RELOADER", "false").strip().lower() in {"1", "true", "yes", "on"}
+    use_reloader = debug and os.getenv("DASH_USE_RELOADER", "true").strip().lower() in {"1", "true", "yes", "on"}
     return host, port, use_reloader
 
 
@@ -52,7 +52,7 @@ def build_layout() -> html.Div:  # Build the main layout of the Dash app
                         html.Div(
                             id="broker-management-panel",
                             className="panel",
-                            children="Broker Management",
+                            children="Broker Snapshot",
                         ),
                         html.Div(
                             id="auto-trade-constraints-panel",

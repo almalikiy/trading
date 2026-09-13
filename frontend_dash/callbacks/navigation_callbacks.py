@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dash import Dash, Input, Output, State
+from dash import Dash, Input, Output, State, callback_context
 
 from frontend_dash.api.client import api_get, api_post, as_mapping
 from frontend_dash.pages import render_overview_page, render_settings_page, render_strategy_page, render_transactions_page
@@ -132,6 +132,99 @@ def register_navigation_callbacks(app: Dash) -> None:
             return label, detail
         except Exception as exc:
             return "Confirm MT5 Operational Check", f"MT5 Operational Check: failed • {exc}"
+
+    @app.callback(
+        Output("broker-action-status", "children"),
+        Input("broker-create-button", "n_clicks"),
+        Input("broker-update-button", "n_clicks"),
+        Input("broker-delete-button", "n_clicks"),
+        State("broker-id-input", "value"),
+        State("broker-name-input", "value"),
+        State("broker-platform-input", "value"),
+        State("broker-symbol-input", "value"),
+        State("broker-terminal-path-input", "value"),
+        prevent_initial_call=True,
+    )
+    def manage_broker(create_clicks: int | None, update_clicks: int | None, delete_clicks: int | None, broker_id_value: str | None, broker_name: str | None, broker_platform: str | None, default_symbol: str | None, terminal_path: str | None):
+        try:
+            trigger = callback_context.triggered_id if callback_context.triggered_id else None
+            broker_id = int(broker_id_value) if broker_id_value not in (None, "") else None
+            payload = {
+                "name": (broker_name or "").strip(),
+                "platform": broker_platform or "mt5",
+                "default_symbol": (default_symbol or "").strip() or None,
+                "terminal_path": (terminal_path or "").strip() or None,
+            }
+            if trigger == "broker-create-button":
+                if not payload["name"]:
+                    return "Broker name is required."
+                result = api_post("/brokers", payload)
+                broker = as_mapping(result).get("broker") if isinstance(result, dict) else None
+                return f"Broker created: {as_mapping(broker).get('name', payload['name'])} • terminal path: {payload['terminal_path'] or '-'}"
+            if trigger == "broker-update-button":
+                if broker_id is None:
+                    return "Enter a Broker ID to update an existing broker."
+                result = api_put(f"/brokers/{broker_id}", payload)
+                broker = as_mapping(result).get("broker") if isinstance(result, dict) else None
+                return f"Broker updated: {as_mapping(broker).get('name', payload['name'])} • terminal path: {payload['terminal_path'] or '-'}"
+            if trigger == "broker-delete-button":
+                if broker_id is None:
+                    return "Enter a Broker ID to delete an existing broker."
+                api_delete(f"/brokers/{broker_id}")
+                return f"Broker {broker_id} deleted."
+            return "No broker action triggered."
+        except Exception as exc:
+            return f"Broker action failed: {exc}"
+
+    @app.callback(
+        Output("broker-table", "selected_rows"),
+        Input("broker-table", "data"),
+        State("broker-table", "selected_rows"),
+    )
+    def select_default_broker_row(broker_rows: list[dict[str, Any]] | None, current_selection: list[int] | None):
+        if not broker_rows:
+            return []
+        if current_selection and current_selection[0] < len(broker_rows):
+            return current_selection
+        default_index = None
+        for idx, row in enumerate(broker_rows):
+            payload = as_mapping(row)
+            if bool(payload.get("is_default")):
+                default_index = idx
+                break
+        if default_index is None and broker_rows:
+            default_index = 0
+        return [default_index] if default_index is not None else []
+
+    @app.callback(
+        Output("broker-id-input", "value"),
+        Output("broker-name-input", "value"),
+        Output("broker-platform-input", "value"),
+        Output("broker-symbol-input", "value"),
+        Output("broker-terminal-path-input", "value"),
+        Input("broker-table", "selected_rows"),
+        Input("broker-table", "data"),
+        State("broker-id-input", "value"),
+        State("broker-name-input", "value"),
+        State("broker-platform-input", "value"),
+        State("broker-symbol-input", "value"),
+        State("broker-terminal-path-input", "value"),
+    )
+    def fill_broker_form(selected_rows: list[int] | None, broker_rows: list[dict[str, Any]] | None, current_id: str | None, current_name: str | None, current_platform: str | None, current_symbol: str | None, current_terminal_path: str | None):
+        if not selected_rows or not broker_rows:
+            if current_name or current_id or current_symbol or current_terminal_path:
+                return current_id or "", current_name or "", current_platform or "mt5", current_symbol or "", current_terminal_path or ""
+            return "", "MT5 Demo", "mt5", "XAUUSD", "D:/MetaQuotes/Terminal"
+        index = selected_rows[0]
+        row = broker_rows[index] if 0 <= index < len(broker_rows) else {}
+        payload = as_mapping(row)
+        return (
+            str(payload.get("id", current_id or "") or current_id or ""),
+            payload.get("name") or current_name or "",
+            payload.get("platform") or current_platform or "mt5",
+            payload.get("default_symbol") or current_symbol or "",
+            payload.get("terminal_path") or current_terminal_path or "",
+        )
 
     @app.callback(
         Output("mt5-diagnostics-panel-status", "children"),

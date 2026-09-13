@@ -50,6 +50,8 @@ def test_dash_callbacks_registered() -> None:
     assert any("drawer-collapsed.data" in key and "sidebar-drawer.className" in key for key in callback_keys)
     assert "strategy-parameter-inputs.children" in callback_keys
     assert "strategy-control-status.children" in callback_keys
+    assert any("broker-table.selected_rows" in key for key in callback_keys)
+    assert any("broker-id-input.value" in key for key in callback_keys)
 
 
 def test_overview_page_renders_without_backend_errors() -> None:

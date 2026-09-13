@@ -50,10 +50,7 @@ def render_settings_page():
                 html.Div(f"Backend: {backend_name}", className="kv-line"),
                 html.Div(f"Status: {status_value}", className="kv-line"),
                 html.Div(f"Preserved: {preserve_label}"),
-            ], className="compact-panel"),
-            html.Div([
-                html.Div("Keep MT5 Alive", className="section-label"),
-                html.Div(f"Status: {keep_alive_mode} • {keep_alive_status.get('status', 'disabled').title()}", className="kv-line"),
+                html.Div(f"MT5 Keep Alive: {keep_alive_mode} • {keep_alive_status.get('status', 'disabled').title()}", className="kv-line"),
             ], className="compact-panel"),
         ]
 
@@ -154,23 +151,34 @@ def render_settings_page():
                     [
                         html.Div(
                             [
+                                html.Label("Broker ID", className="field-label"),
+                                dcc.Input(id="broker-id-input", type="number", value="", placeholder="Broker ID for update/delete", className="strategy-parameter-input"),
                                 html.Label("Broker Name", className="field-label"),
                                 dcc.Input(id="broker-name-input", type="text", value="MT5 Demo", className="strategy-parameter-input"),
                                 html.Label("Platform", className="field-label"),
                                 dcc.Dropdown(id="broker-platform-input", options=[{"label": "MT5", "value": "mt5"}, {"label": "MT4", "value": "mt4"}], value="mt5", clearable=False, searchable=False),
                                 html.Label("Default Symbol", className="field-label"),
                                 dcc.Input(id="broker-symbol-input", type="text", value="XAUUSD", className="strategy-parameter-input"),
+                                html.Label("Terminal Path", className="field-label"),
+                                dcc.Input(
+                                    id="broker-terminal-path-input",
+                                    type="text",
+                                    value="D:/MetaQuotes/Terminal",
+                                    placeholder="D:/MetaQuotes/Terminal",
+                                    className="strategy-parameter-input",
+                                ),
                             ],
                             className="compact-panel",
                         ),
                         html.Div(
                             [
-                                html.Button("Create Broker", className="action-button neutral", n_clicks=0),
-                                html.Button("Update Selected Broker", className="action-button buy", n_clicks=0),
-                                html.Button("Delete Selected Broker", className="action-button sell", n_clicks=0),
+                                html.Button("Create Broker", id="broker-create-button", className="action-button neutral", n_clicks=0),
+                                html.Button("Update Selected Broker", id="broker-update-button", className="action-button buy", n_clicks=0),
+                                html.Button("Delete Selected Broker", id="broker-delete-button", className="action-button sell", n_clicks=0),
                             ],
                             className="action-row",
                         ),
+                        html.Div(id="broker-action-status", className="kv-line"),
                     ],
                     className="settings-grid",
                 ),
@@ -243,21 +251,28 @@ def render_settings_page():
         )
 
         brokers_table = DataTable(
+            id="broker-table",
             columns=[
+                {"name": "ID", "id": "id", "hidden": True},
                 {"name": "Broker", "id": "name"},
                 {"name": "Platform", "id": "platform"},
                 {"name": "Default Symbol", "id": "default_symbol"},
+                {"name": "Terminal Path", "id": "terminal_path"},
                 {"name": "Active", "id": "is_active"},
             ],
             data=[
                 {
+                    "id": as_mapping(item).get("id", ""),
                     "name": as_mapping(item).get("name", "-"),
                     "platform": as_mapping(item).get("platform", "-"),
                     "default_symbol": as_mapping(item).get("default_symbol", "-"),
+                    "terminal_path": as_mapping(item).get("terminal_path") or "-",
                     "is_active": "yes" if bool(as_mapping(item).get("is_active")) else "no",
                 }
                 for item in rows[:20]
             ],
+            row_selectable="single",
+            selected_rows=[],
             style_table={"overflowX": "auto"},
             style_cell={"padding": "8px"},
         )

@@ -7,7 +7,8 @@ from trading_bot.infrastructure.config.settings import Settings
 
 def build_postgres_dsn(settings: Settings) -> str:
     if settings.postgres_dsn:
-        return settings.postgres_dsn
+        dsn = settings.postgres_dsn
+        return dsn.replace("postgresql+psycopg://", "postgresql://").replace("postgresql+psycopg2://", "postgresql://")
 
     password = settings.postgres_password.get_secret_value() if settings.postgres_password else ""
     return (

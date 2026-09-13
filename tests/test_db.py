@@ -2,6 +2,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import trading_bot.app.db as db
@@ -75,6 +77,30 @@ def test_init_db_adds_default_symbol_column(tmp_path):
         ).fetchone()
         assert row is not None
         assert row[0] == "XAUUSD"
+
+
+def test_get_db_blocks_default_sqlite_when_postgres_is_active():
+    db.DB_PATH = db.DEFAULT_DB_PATH
+
+    with pytest.raises(RuntimeError, match="SQLite read path is disabled"):
+        with db.get_db():
+            pass
+
+    db.DB_PATH = str(Path(__file__).resolve().parent / "tmp_sqlite_test.db")
+    try:
+        with db.get_db() as conn:
+            assert conn is not None
+    finally:
+        db.DB_PATH = db.DEFAULT_DB_PATH
+
+
+def test_legacy_json_migration_requires_explicit_opt_in(monkeypatch, tmp_path):
+    monkeypatch.delenv("ALLOW_LEGACY_JSON_MIGRATION", raising=False)
+    monkeypatch.setattr(db, "DEFAULT_DB_PATH", str(tmp_path / "runtime.db"))
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "runtime.db"))
+
+    with pytest.raises(RuntimeError, match="legacy JSON migration is disabled"):
+        db.migrate_legacy_json_to_db()
 
 
 def test_save_account_state_persists_trade_history_sync_settings(tmp_path):
